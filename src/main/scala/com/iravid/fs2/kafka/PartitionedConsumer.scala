@@ -24,10 +24,10 @@ object PartitionedConsumer {
   }
 
   object PartitionHandle {
-    def fromTopicPartition[F[_]: Effect](tp: TopicPartition)(
+    def fromTopicPartition[F[_]: Effect](tp: TopicPartition, bufferSize: Int)(
       implicit ec: ExecutionContext): F[(TopicPartition, PartitionHandle[F])] =
       for {
-        queue   <- async.boundedQueue[F, ByteRecord](1000)
+        queue   <- async.boundedQueue[F, ByteRecord](bufferSize)
         promise <- async.Promise.empty[F, Either[Throwable, Unit]]
       } yield (tp, PartitionHandle(queue, promise))
   }
@@ -36,6 +36,7 @@ object PartitionedConsumer {
     settings: Properties,
     subscription: Subscription,
     maxPendingCommits: Int,
+    partitionBufferSize: Int,
     pollTimeout: FiniteDuration,
     pollInterval: FiniteDuration)(implicit ec: ExecutionContext): F[PartitionedConsumer[F]] =
     for {
@@ -50,7 +51,8 @@ object PartitionedConsumer {
               def onPartitionsAssigned(partitions: JCollection[TopicPartition]): Unit = {
                 val handler = for {
                   handles <- partitions.asScala.toList
-                              .traverse(PartitionHandle.fromTopicPartition[F])
+                              .traverse(
+                                PartitionHandle.fromTopicPartition[F](_, partitionBufferSize))
                   _ <- partitionTracker.modify(_ ++ handles)
                   _ <- handles.traverse { case (tp, h) => out.enqueue1((tp, h.records)) }
                 } yield ()
