@@ -8,8 +8,7 @@ import fs2.async
 import scala.concurrent.ExecutionContext
 
 case class CommitQueue[F[_]](queue: async.mutable.Queue[F, CommitRequest[F]]) {
-  def requestCommit(request: CommitRequest[F])(
-    implicit F: MonadError[F, Throwable]): F[Unit] =
+  def requestCommit(request: CommitRequest[F])(implicit F: MonadError[F, Throwable]): F[Unit] =
     queue.enqueue1(request) *> request.promise.get.rethrow
 }
 

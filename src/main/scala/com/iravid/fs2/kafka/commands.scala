@@ -8,8 +8,10 @@ import org.apache.kafka.common.TopicPartition
 
 import scala.concurrent.ExecutionContext
 
-case class CommitRequest[F[_]](promise: async.Promise[F, Either[Throwable, Unit]], topic: String,
-  partition: Int, offset: Long) {
+case class CommitRequest[F[_]](promise: async.Promise[F, Either[Throwable, Unit]],
+                               topic: String,
+                               partition: Int,
+                               offset: Long) {
   def asOffsetMap: OffsetMap =
     Map(new TopicPartition(topic, partition) -> new OffsetAndMetadata(offset))
 }
@@ -17,7 +19,8 @@ case class CommitRequest[F[_]](promise: async.Promise[F, Either[Throwable, Unit]
 object CommitRequest {
   def apply[F[_]: Effect](topic: String, partition: Int, offset: Long)(
     implicit ec: ExecutionContext): F[CommitRequest[F]] =
-    async.Promise.empty[F, Either[Throwable, Unit]]
+    async.Promise
+      .empty[F, Either[Throwable, Unit]]
       .map(CommitRequest(_, topic, partition, offset))
 }
 

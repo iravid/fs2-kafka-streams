@@ -1,6 +1,6 @@
 package com.iravid.fs2
 
-import java.util.{ Map => JMap, Collection => JCollection, Properties }
+import java.util.{ Map => JMap }
 import org.apache.kafka.clients.consumer.{ ConsumerRecord, KafkaConsumer, OffsetAndMetadata }
 import org.apache.kafka.clients.producer.{ KafkaProducer, ProducerRecord }
 import org.apache.kafka.common.TopicPartition
