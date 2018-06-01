@@ -133,12 +133,10 @@ object Client {
               records <- poll(consumer, ???)
               tracker <- partitionTracker.get
               _ <- records.traverse_ { record =>
-                tracker.get(new TopicPartition(record.topic, record.partition)) match {
-                  case None => Sync[F].unit
-                  case Some(handle) =>
-                    handle.data.enqueue1(record)
-                }
-              }
+                     tracker
+                       .get(new TopicPartition(record.topic, record.partition))
+                       .traverse_(_.data.enqueue1(record))
+                   }
             } yield ()
         }
         .compile
