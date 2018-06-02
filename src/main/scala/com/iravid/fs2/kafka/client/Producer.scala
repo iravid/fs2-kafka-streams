@@ -1,9 +1,17 @@
 package com.iravid.fs2.kafka.client
 
-import cats.effect.Async
+import cats.effect.{ Async, Sync }
+import fs2.Stream
+import java.util.Properties
 import org.apache.kafka.clients.producer.{ Callback, RecordMetadata }
+import org.apache.kafka.common.serialization.ByteArraySerializer
 
-object Producing {
+object Producer {
+  def create[F[_]: Sync](settings: Properties) =
+    Stream.bracket(Sync[F].delay {
+      new ByteProducer(settings, new ByteArraySerializer, new ByteArraySerializer)
+    })(Stream.emit(_), producer => Sync[F].delay(producer.close()))
+
   def produce[F[_]: Async](producer: ByteProducer, record: ByteProducerRecord): F[RecordMetadata] =
     Async[F].async { cb =>
       producer.send(

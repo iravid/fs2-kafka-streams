@@ -44,13 +44,14 @@ object Consumer {
           }
     } yield (commitQueue, outQueue, pollingLoopShutdown.complete(Right(())), consumer)
 
-  def apply[F[_]: ConcurrentEffect](
-    settings: Properties,
-    subscription: Subscription,
-    maxPendingCommits: Int,
-    bufferSize: Int,
-    pollInterval: FiniteDuration,
-    pollTimeout: FiniteDuration)(implicit ec: ExecutionContext, timer: Timer[F]): Stream[F, Consumer[F]] =
+  def apply[F[_]: ConcurrentEffect](settings: Properties,
+                                    subscription: Subscription,
+                                    maxPendingCommits: Int,
+                                    bufferSize: Int,
+                                    pollInterval: FiniteDuration,
+                                    pollTimeout: FiniteDuration)(
+    implicit ec: ExecutionContext,
+    timer: Timer[F]): Stream[F, Consumer[F]] =
     Stream
       .bracket(resources[F](settings, maxPendingCommits, bufferSize, pollInterval, pollTimeout))(
         {
