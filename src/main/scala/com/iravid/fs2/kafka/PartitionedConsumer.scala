@@ -16,6 +16,12 @@ case class PartitionedConsumer[F[_]](commitQueue: CommitQueue[F],
 object PartitionedConsumer {
   import KafkaConsumerFunctions._
 
+  sealed trait Rebalance
+  object Rebalance {
+    case class Assign(partitions: List[TopicPartition]) extends Rebalance
+    case class Revoke(partitions: List[TopicPartition]) extends Rebalance
+  }
+
   case class PartitionHandle[F[_]](data: async.mutable.Queue[F, ByteRecord],
                                    interruption: async.Promise[F, Either[Throwable, Unit]]) {
     def records(implicit F: Effect[F], ec: ExecutionContext): Stream[F, ByteRecord] =
@@ -41,61 +47,66 @@ object PartitionedConsumer {
     for {
       consumer         <- createConsumer[F](settings)
       commitQueue      <- CommitQueue.create[F](maxPendingCommits)
-      partitionTracker <- async.boundedQueue[F, Map[TopicPartition, PartitionHandle[F]]](1)
-      _                <- partitionTracker.enqueue1(Map())
+      partitionTracker <- async.Ref[F, Map[TopicPartition, PartitionHandle[F]]](Map())
       partitionsOut    <- async.unboundedQueue[F, (TopicPartition, Stream[F, ByteRecord])]
 
+      rebalanceQueue <- async.synchronousQueue[F, Rebalance]
       rebalanceListener = new ConsumerRebalanceListener {
-        def onPartitionsAssigned(partitions: JCollection[TopicPartition]): Unit = {
-          val handler = for {
-            handles <- partitions.asScala.toList
-                        .traverse(PartitionHandle.fromTopicPartition[F](_, partitionBufferSize))
-            _ <- partitionTracker.dequeue1
-                  .map(_ ++ handles)
-                  .flatMap(partitionTracker.enqueue1)
-            _ <- handles.traverse {
-                  case (tp, h) => partitionsOut.enqueue1((tp, h.records))
-                }
-          } yield ()
+        def onPartitionsAssigned(jpartitions: JCollection[TopicPartition]): Unit =
+          Effect[F]
+            .runAsync(rebalanceQueue.enqueue1(Rebalance.Assign(jpartitions.asScala.toList)))(_ =>
+              IO.unit)
+            .unsafeRunSync()
 
-          Effect[F].runAsync(handler)(_ => IO.unit).unsafeRunSync()
-        }
-
-        def onPartitionsRevoked(jpartitions: JCollection[TopicPartition]): Unit = {
-          val handler = for {
-            tracker <- partitionTracker.dequeue1
-            partitions = jpartitions.asScala.toList
-            handles    = partitions.flatMap(tracker.get)
-            _ <- handles.traverse_(_.interruption.complete(Right(())))
-            _ <- partitionTracker.enqueue1(tracker -- partitions)
-          } yield ()
-
-          Effect[F].runAsync(handler)(_ => IO.unit).unsafeRunSync()
-        }
+        def onPartitionsRevoked(jpartitions: JCollection[TopicPartition]): Unit =
+          Effect[F]
+            .runAsync(rebalanceQueue.enqueue1(Rebalance.Revoke(jpartitions.asScala.toList)))(_ =>
+              IO.unit)
+            .unsafeRunSync()
       }
 
-      commits = commitQueue.queue.dequeue
-      polls   = Stream(Poll) ++ Stream.repeatEval(timer.sleep(pollInterval).as(Poll))
+      commits    = commitQueue.queue.dequeue
+      polls      = Stream(Poll) ++ Stream.repeatEval(timer.sleep(pollInterval).as(Poll))
+      rebalances = rebalanceQueue.dequeue
 
       pollingLoopShutdown <- async.Promise.empty[F, Either[Throwable, Unit]]
 
       _ <- Concurrent[F].start {
             commits
               .either(polls)
+              .either(rebalances)
               .interruptWhen(pollingLoopShutdown.get)
               .evalMap {
-                case Left(req) =>
+                case Left(Left(req)) =>
                   (commit(consumer, req.asOffsetMap).void.attempt >>= req.promise.complete).void
-                case Right(Poll) =>
+                case Left(Right(Poll)) =>
                   for {
                     records <- poll(consumer, pollTimeout)
-                    tracker <- partitionTracker.dequeue1
+                    tracker <- partitionTracker.get
                     _ <- records.traverse_ { record =>
                           tracker
                             .get(new TopicPartition(record.topic, record.partition))
                             .traverse_(_.data.enqueue1(record))
                         }
-                    _ <- partitionTracker.enqueue1(tracker)
+                  } yield ()
+
+                case Right(Rebalance.Assign(partitions)) =>
+                  for {
+                    tracker <- partitionTracker.get
+                    handles <- partitions.traverse(
+                                PartitionHandle.fromTopicPartition(_, partitionBufferSize))
+                    _ <- partitionTracker.setSync(tracker ++ handles)
+                    _ <- handles.traverse_ {
+                          case (tp, h) => partitionsOut.enqueue1((tp, h.records))
+                        }
+                  } yield ()
+
+                case Right(Rebalance.Revoke(partitions)) =>
+                  for {
+                    tracker <- partitionTracker.get
+                    handles = partitions.flatMap(tracker.get)
+                    _ <- handles.traverse_(_.interruption.complete(Right(())))
+                    _ <- partitionTracker.setSync(tracker -- partitions)
                   } yield ()
               }
               .compile
