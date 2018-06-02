@@ -1,4 +1,4 @@
-package com.iravid.fs2.kafka
+package com.iravid.fs2.kafka.client
 
 import cats.effect._, cats.implicits._
 import fs2._

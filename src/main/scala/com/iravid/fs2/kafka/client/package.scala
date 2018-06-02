@@ -1,11 +1,11 @@
-package com.iravid.fs2
+package com.iravid.fs2.kafka
 
 import java.util.{ Map => JMap }
 import org.apache.kafka.clients.consumer.{ ConsumerRecord, KafkaConsumer, OffsetAndMetadata }
 import org.apache.kafka.clients.producer.{ KafkaProducer, ProducerRecord }
 import org.apache.kafka.common.TopicPartition
 
-package object kafka {
+package object client {
   type ByteRecord = ConsumerRecord[Array[Byte], Array[Byte]]
   type ByteConsumer = KafkaConsumer[Array[Byte], Array[Byte]]
   type OffsetMap = Map[TopicPartition, OffsetAndMetadata]

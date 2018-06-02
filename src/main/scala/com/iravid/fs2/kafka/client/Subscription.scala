@@ -1,4 +1,4 @@
-package com.iravid.fs2.kafka
+package com.iravid.fs2.kafka.client
 
 sealed trait Subscription
 object Subscription {

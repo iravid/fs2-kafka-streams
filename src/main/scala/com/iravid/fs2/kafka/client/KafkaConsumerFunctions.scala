@@ -1,4 +1,4 @@
-package com.iravid.fs2.kafka
+package com.iravid.fs2.kafka.client
 
 import cats.effect.{ Async, Sync }
 import cats.implicits._
