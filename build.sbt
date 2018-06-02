@@ -14,7 +14,7 @@ lazy val root = (project in file(".")).settings(
     "org.apache.kafka" % "kafka-clients" % "1.1.0",
     "org.typelevel"    %% "cats-core"    % "1.1.0",
     "org.typelevel"    %% "cats-effect"  % "0.10.1",
-    "co.fs2"           %% "fs2-core"     % "0.10.4"
+    "co.fs2"           %% "fs2-core"     % "0.10.5"
   ),
   scalacOptions ++= Seq(
     "-deprecation", // Emit warning and location for usages of deprecated APIs.
