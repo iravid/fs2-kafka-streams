@@ -1,6 +1,7 @@
 package com.iravid.fs2.kafka.client
 
 import cats.effect._, cats.implicits._
+import com.iravid.fs2.kafka.client.codecs.KafkaDecoder
 import fs2._
 import java.util.{ Collection => JCollection, Properties }
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener
@@ -10,8 +11,9 @@ import scala.collection.JavaConverters._
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
 
-case class PartitionedConsumer[F[_]](commitQueue: CommitQueue[F],
-                                     records: Stream[F, (TopicPartition, Stream[F, ByteRecord])])
+case class PartitionedConsumer[F[_], T](
+  commitQueue: CommitQueue[F],
+  records: Stream[F, (TopicPartition, Stream[F, ConsumerMessage[Result, T]])])
 
 object PartitionedConsumer {
   import KafkaConsumerFunctions._
@@ -37,7 +39,7 @@ object PartitionedConsumer {
       } yield (tp, PartitionHandle(queue, promise))
   }
 
-  def resources[F[_]: ConcurrentEffect](
+  def resources[F[_]: ConcurrentEffect, T: KafkaDecoder](
     settings: Properties,
     maxPendingCommits: Int,
     partitionBufferSize: Int,
@@ -48,7 +50,8 @@ object PartitionedConsumer {
       consumer         <- createConsumer[F](settings)
       commitQueue      <- CommitQueue.create[F](maxPendingCommits)
       partitionTracker <- async.Ref[F, Map[TopicPartition, PartitionHandle[F]]](Map())
-      partitionsOut    <- async.unboundedQueue[F, (TopicPartition, Stream[F, ByteRecord])]
+      partitionsOut <- async
+                        .unboundedQueue[F, (TopicPartition, Stream[F, ConsumerMessage[Result, T]])]
 
       rebalanceQueue <- async.synchronousQueue[F, Rebalance]
       rebalanceListener = new ConsumerRebalanceListener {
@@ -97,7 +100,8 @@ object PartitionedConsumer {
                                 PartitionHandle.fromTopicPartition(_, partitionBufferSize))
                     _ <- partitionTracker.setSync(tracker ++ handles)
                     _ <- handles.traverse_ {
-                          case (tp, h) => partitionsOut.enqueue1((tp, h.records))
+                          case (tp, h) =>
+                            partitionsOut.enqueue1((tp, h.records through deserialize[F, T]))
                         }
                   } yield ()
 
@@ -120,14 +124,14 @@ object PartitionedConsumer {
         consumer,
         rebalanceListener)
 
-  def apply[F[_]: ConcurrentEffect](settings: Properties,
-                                    subscription: Subscription,
-                                    maxPendingCommits: Int,
-                                    partitionBufferSize: Int,
-                                    pollTimeout: FiniteDuration,
-                                    pollInterval: FiniteDuration)(
+  def apply[F[_]: ConcurrentEffect, T: KafkaDecoder](settings: Properties,
+                                                     subscription: Subscription,
+                                                     maxPendingCommits: Int,
+                                                     partitionBufferSize: Int,
+                                                     pollTimeout: FiniteDuration,
+                                                     pollInterval: FiniteDuration)(
     implicit ec: ExecutionContext,
-    timer: Timer[F]): Stream[F, PartitionedConsumer[F]] =
+    timer: Timer[F]): Stream[F, PartitionedConsumer[F, T]] =
     Stream
       .bracket(
         resources(settings, maxPendingCommits, partitionBufferSize, pollTimeout, pollInterval))(

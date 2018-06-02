@@ -2,6 +2,8 @@ package com.iravid.fs2.kafka.client
 
 import cats.effect.{ Async, Sync }
 import cats.implicits._
+import com.iravid.fs2.kafka.client.codecs.KafkaDecoder
+import fs2.Pipe
 import java.util.Properties
 import org.apache.kafka.clients.consumer.internals.NoOpConsumerRebalanceListener
 import org.apache.kafka.clients.consumer.{ ConsumerRebalanceListener, OffsetCommitCallback }
@@ -44,4 +46,7 @@ object KafkaConsumerFunctions {
         } yield ()
     }
   }
+
+  def deserialize[F[_], T: KafkaDecoder]: Pipe[F, ByteRecord, ConsumerMessage[Result, T]] =
+    _.map(rec => EnvT(rec, KafkaDecoder[T].decode(rec)))
 }
