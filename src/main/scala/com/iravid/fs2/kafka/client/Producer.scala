@@ -12,7 +12,7 @@ import org.apache.kafka.common.serialization.ByteArraySerializer
 import scala.collection.JavaConverters._
 
 object Producer {
-  def create[F[_]: Sync](settings: Properties) =
+  def create[F[_]: Sync](settings: Properties): Stream[F, ByteProducer] =
     Stream.bracket(Sync[F].delay {
       new ByteProducer(settings, new ByteArraySerializer, new ByteArraySerializer)
     })(Stream.emit(_), producer => Sync[F].delay(producer.close()))
@@ -20,7 +20,7 @@ object Producer {
   def toProducerRecord[T: KafkaEncoder](t: T,
                                         topic: String,
                                         partition: Int,
-                                        timestamp: Option[Long]) = {
+                                        timestamp: Option[Long]): ByteProducerRecord = {
     val (key, value) = KafkaEncoder[T].encode(t)
 
     new ByteProducerRecord(
