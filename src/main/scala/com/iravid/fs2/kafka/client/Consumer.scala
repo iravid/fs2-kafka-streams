@@ -50,7 +50,7 @@ object Consumer {
     maxPendingCommits: Int,
     bufferSize: Int,
     pollInterval: FiniteDuration,
-    pollTimeout: FiniteDuration)(implicit ec: ExecutionContext, timer: Timer[F]): F[Consumer[F]] =
+    pollTimeout: FiniteDuration)(implicit ec: ExecutionContext, timer: Timer[F]): Stream[F, Consumer[F]] =
     Stream
       .bracket(resources[F](settings, maxPendingCommits, bufferSize, pollInterval, pollTimeout))(
         {
@@ -68,8 +68,4 @@ object Consumer {
             } yield ()
         }
       )
-      .compile
-      .toList
-      .map(_.last) // TODO: Replace with F.bracket when cats-effect 1.0 is out
-
 }

@@ -127,7 +127,7 @@ object PartitionedConsumer {
                                     pollTimeout: FiniteDuration,
                                     pollInterval: FiniteDuration)(
     implicit ec: ExecutionContext,
-    timer: Timer[F]): F[PartitionedConsumer[F]] =
+    timer: Timer[F]): Stream[F, PartitionedConsumer[F]] =
     Stream
       .bracket(
         resources(settings, maxPendingCommits, partitionBufferSize, pollTimeout, pollInterval))(
@@ -146,7 +146,4 @@ object PartitionedConsumer {
             } yield ()
         }
       )
-      .compile
-      .toList
-      .map(_.last) // TODO: Replace with F.bracket when cats-effect 1.0 is out
 }
