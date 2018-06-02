@@ -5,13 +5,14 @@ import cats.implicits._
 import java.util.Properties
 import org.apache.kafka.clients.consumer.internals.NoOpConsumerRebalanceListener
 import org.apache.kafka.clients.consumer.{ ConsumerRebalanceListener, OffsetCommitCallback }
+import org.apache.kafka.common.serialization.ByteArrayDeserializer
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration._
 
 object KafkaConsumerFunctions {
   def createConsumer[F[_]: Sync](settings: Properties): F[ByteConsumer] =
-    Sync[F].delay(new ByteConsumer(settings))
+    Sync[F].delay(new ByteConsumer(settings, new ByteArrayDeserializer, new ByteArrayDeserializer))
 
   def commit[F[_]: Async](consumer: ByteConsumer, data: OffsetMap): F[OffsetMap] =
     Async[F].async { cb =>
