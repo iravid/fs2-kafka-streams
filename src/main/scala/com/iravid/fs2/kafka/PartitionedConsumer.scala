@@ -37,7 +37,7 @@ object PartitionedConsumer {
     partitionBufferSize: Int,
     pollTimeout: FiniteDuration,
     pollInterval: FiniteDuration
-  )(implicit ec: ExecutionContext) =
+  )(implicit ec: ExecutionContext, timer: Timer[F]) =
     for {
       consumer         <- createConsumer[F](settings)
       commitQueue      <- CommitQueue.create[F](maxPendingCommits)
@@ -75,37 +75,48 @@ object PartitionedConsumer {
       }
 
       commits = commitQueue.queue.dequeue
-      polls   = Stream.every(pollInterval).as(Poll)
-      driver <- Concurrent[F].start {
-                 commits
-                   .either(polls)
-                   .evalMap {
-                     case Left(req) =>
-                       (commit(consumer, req.asOffsetMap).void.attempt >>= req.promise.complete).void
-                     case Right(Poll) =>
-                       for {
-                         records <- poll(consumer, pollTimeout)
-                         tracker <- partitionTracker.dequeue1
-                         _ <- records.traverse_ { record =>
-                               tracker
-                                 .get(new TopicPartition(record.topic, record.partition))
-                                 .traverse_(_.data.enqueue1(record))
-                             }
-                         _ <- partitionTracker.enqueue1(tracker)
-                       } yield ()
-                   }
-                   .compile
-                   .drain
-               }
-    } yield (commitQueue, partitionsOut, driver, consumer, rebalanceListener)
+      polls   = Stream(Poll) ++ Stream.repeatEval(timer.sleep(pollInterval).as(Poll))
 
-  def apply[F[_]: ConcurrentEffect](
-    settings: Properties,
-    subscription: Subscription,
-    maxPendingCommits: Int,
-    partitionBufferSize: Int,
-    pollTimeout: FiniteDuration,
-    pollInterval: FiniteDuration)(implicit ec: ExecutionContext): F[PartitionedConsumer[F]] =
+      pollingLoopShutdown <- async.Promise.empty[F, Either[Throwable, Unit]]
+
+      _ <- Concurrent[F].start {
+            commits
+              .either(polls)
+              .interruptWhen(pollingLoopShutdown.get)
+              .evalMap {
+                case Left(req) =>
+                  (commit(consumer, req.asOffsetMap).void.attempt >>= req.promise.complete).void
+                case Right(Poll) =>
+                  for {
+                    records <- poll(consumer, pollTimeout)
+                    tracker <- partitionTracker.dequeue1
+                    _ <- records.traverse_ { record =>
+                          tracker
+                            .get(new TopicPartition(record.topic, record.partition))
+                            .traverse_(_.data.enqueue1(record))
+                        }
+                    _ <- partitionTracker.enqueue1(tracker)
+                  } yield ()
+              }
+              .compile
+              .drain
+          }
+    } yield
+      (
+        commitQueue,
+        partitionsOut,
+        pollingLoopShutdown.complete(Right(())),
+        consumer,
+        rebalanceListener)
+
+  def apply[F[_]: ConcurrentEffect](settings: Properties,
+                                    subscription: Subscription,
+                                    maxPendingCommits: Int,
+                                    partitionBufferSize: Int,
+                                    pollTimeout: FiniteDuration,
+                                    pollInterval: FiniteDuration)(
+    implicit ec: ExecutionContext,
+    timer: Timer[F]): F[PartitionedConsumer[F]] =
     Stream
       .bracket(
         resources(settings, maxPendingCommits, partitionBufferSize, pollTimeout, pollInterval))(
@@ -116,15 +127,15 @@ object PartitionedConsumer {
                 .as(PartitionedConsumer(commitQueue, partitionsOut.dequeue))
             }
         }, {
-          case (_, _, driver, consumer, _) =>
+          case (_, _, shutdown, consumer, _) =>
             for {
               _ <- Sync[F].delay(consumer.unsubscribe())
-              _ <- driver.cancel
+              _ <- shutdown
               _ <- Sync[F].delay(consumer.close())
             } yield ()
         }
       )
       .compile
       .toList
-      .map(_.last)
+      .map(_.last) // TODO: Replace with F.bracket when cats-effect 1.0 is out
 }
