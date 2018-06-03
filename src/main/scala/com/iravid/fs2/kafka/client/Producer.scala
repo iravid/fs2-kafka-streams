@@ -1,9 +1,8 @@
 package com.iravid.fs2.kafka.client
 
 import cats.Id
-import cats.effect.{ Async, Sync }
+import cats.effect.{ Async, Resource, Sync }
 import com.iravid.fs2.kafka.client.codecs.KafkaEncoder
-import fs2.Stream
 import java.util.Properties
 import org.apache.kafka.clients.producer.{ Callback, RecordMetadata }
 import org.apache.kafka.common.header.Header
@@ -12,10 +11,10 @@ import org.apache.kafka.common.serialization.ByteArraySerializer
 import scala.collection.JavaConverters._
 
 object Producer {
-  def create[F[_]: Sync](settings: Properties): Stream[F, ByteProducer] =
-    Stream.bracket(Sync[F].delay {
+  def create[F[_]: Sync](settings: Properties): Resource[F, ByteProducer] =
+    Resource.make(Sync[F].delay {
       new ByteProducer(settings, new ByteArraySerializer, new ByteArraySerializer)
-    })(Stream.emit(_), producer => Sync[F].delay(producer.close()))
+    })(producer => Sync[F].delay(producer.close()))
 
   def toProducerRecord[T: KafkaEncoder](t: T,
                                         topic: String,

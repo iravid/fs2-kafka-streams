@@ -1,6 +1,7 @@
 package com.iravid.fs2.kafka.client
 
 import cats.effect._, cats.implicits._
+import cats.effect.concurrent.{ Deferred, Ref }
 import com.iravid.fs2.kafka.client.codecs.KafkaDecoder
 import fs2._
 import java.util.{ Collection => JCollection, Properties }
@@ -9,7 +10,6 @@ import org.apache.kafka.common.TopicPartition
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration._
-import scala.concurrent.ExecutionContext
 
 case class PartitionedConsumer[F[_], T](
   commitQueue: CommitQueue[F],
@@ -25,17 +25,18 @@ object PartitionedConsumer {
   }
 
   case class PartitionHandle[F[_]](data: async.mutable.Queue[F, ByteRecord],
-                                   interruption: async.Promise[F, Either[Throwable, Unit]]) {
-    def records(implicit F: Effect[F], ec: ExecutionContext): Stream[F, ByteRecord] =
+                                   interruption: Deferred[F, Either[Throwable, Unit]]) {
+    def records(implicit F: Concurrent[F]): Stream[F, ByteRecord] =
       data.dequeue.interruptWhen(interruption.get)
   }
 
   object PartitionHandle {
-    def fromTopicPartition[F[_]: Effect](tp: TopicPartition, bufferSize: Int)(
-      implicit ec: ExecutionContext): F[(TopicPartition, PartitionHandle[F])] =
+    def fromTopicPartition[F[_]: Concurrent](
+      tp: TopicPartition,
+      bufferSize: Int): F[(TopicPartition, PartitionHandle[F])] =
       for {
         queue   <- async.boundedQueue[F, ByteRecord](bufferSize)
-        promise <- async.Promise.empty[F, Either[Throwable, Unit]]
+        promise <- Deferred[F, Either[Throwable, Unit]]
       } yield (tp, PartitionHandle(queue, promise))
   }
 
@@ -45,11 +46,11 @@ object PartitionedConsumer {
     partitionBufferSize: Int,
     pollTimeout: FiniteDuration,
     pollInterval: FiniteDuration
-  )(implicit ec: ExecutionContext, timer: Timer[F]) =
+  )(implicit timer: Timer[F]) =
     for {
       consumer         <- createConsumer[F](settings)
       commitQueue      <- CommitQueue.create[F](maxPendingCommits)
-      partitionTracker <- async.Ref[F, Map[TopicPartition, PartitionHandle[F]]](Map())
+      partitionTracker <- Ref[F].of(Map.empty[TopicPartition, PartitionHandle[F]])
       partitionsOut <- async
                         .unboundedQueue[F, (TopicPartition, Stream[F, ConsumerMessage[Result, T]])]
 
@@ -72,7 +73,7 @@ object PartitionedConsumer {
       polls      = Stream(Poll) ++ Stream.repeatEval(timer.sleep(pollInterval).as(Poll))
       rebalances = rebalanceQueue.dequeue
 
-      pollingLoopShutdown <- async.Promise.empty[F, Either[Throwable, Unit]]
+      pollingLoopShutdown <- Deferred[F, Either[Throwable, Unit]]
 
       _ <- Concurrent[F].start {
             commits
@@ -98,7 +99,7 @@ object PartitionedConsumer {
                     tracker <- partitionTracker.get
                     handles <- partitions.traverse(
                                 PartitionHandle.fromTopicPartition(_, partitionBufferSize))
-                    _ <- partitionTracker.setSync(tracker ++ handles)
+                    _ <- partitionTracker.set(tracker ++ handles)
                     _ <- handles.traverse_ {
                           case (tp, h) =>
                             partitionsOut.enqueue1((tp, h.records through deserialize[F, T]))
@@ -110,7 +111,7 @@ object PartitionedConsumer {
                     tracker <- partitionTracker.get
                     handles = partitions.flatMap(tracker.get)
                     _ <- handles.traverse_(_.interruption.complete(Right(())))
-                    _ <- partitionTracker.setSync(tracker -- partitions)
+                    _ <- partitionTracker.set(tracker -- partitions)
                   } yield ()
               }
               .compile
@@ -130,24 +131,22 @@ object PartitionedConsumer {
                                                      partitionBufferSize: Int,
                                                      pollTimeout: FiniteDuration,
                                                      pollInterval: FiniteDuration)(
-    implicit ec: ExecutionContext,
-    timer: Timer[F]): Stream[F, PartitionedConsumer[F, T]] =
-    Stream
-      .bracket(
-        resources(settings, maxPendingCommits, partitionBufferSize, pollTimeout, pollInterval))(
-        {
-          case (commitQueue, partitionsOut, _, consumer, rebalanceListener) =>
-            Stream.eval {
-              subscribe(consumer, subscription, Some(rebalanceListener))
-                .as(PartitionedConsumer(commitQueue, partitionsOut.dequeue))
-            }
-        }, {
-          case (_, _, shutdown, consumer, _) =>
-            for {
-              _ <- Sync[F].delay(consumer.unsubscribe())
-              _ <- shutdown
-              _ <- Sync[F].delay(consumer.close())
-            } yield ()
-        }
-      )
+    implicit
+    timer: Timer[F]): Resource[F, PartitionedConsumer[F, T]] =
+    Resource
+      .make(resources(settings, maxPendingCommits, partitionBufferSize, pollTimeout, pollInterval)) {
+        case (_, _, shutdown, consumer, _) =>
+          for {
+            _ <- Sync[F].delay(consumer.unsubscribe())
+            _ <- shutdown
+            _ <- Sync[F].delay(consumer.close())
+          } yield ()
+      }
+      .flatMap {
+        case (commitQueue, partitionsOut, _, consumer, rebalanceListener) =>
+          Resource.liftF {
+            subscribe(consumer, subscription, Some(rebalanceListener))
+              .as(PartitionedConsumer(commitQueue, partitionsOut.dequeue))
+          }
+      }
 }

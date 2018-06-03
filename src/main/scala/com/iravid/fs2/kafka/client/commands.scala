@@ -1,14 +1,12 @@
 package com.iravid.fs2.kafka.client
 
-import cats.effect.Effect
+import cats.effect.Concurrent
+import cats.effect.concurrent.Deferred
 import cats.implicits._
-import fs2.async
 import org.apache.kafka.clients.consumer.OffsetAndMetadata
 import org.apache.kafka.common.TopicPartition
 
-import scala.concurrent.ExecutionContext
-
-case class CommitRequest[F[_]](promise: async.Promise[F, Either[Throwable, Unit]],
+case class CommitRequest[F[_]](promise: Deferred[F, Either[Throwable, Unit]],
                                topic: String,
                                partition: Int,
                                offset: Long) {
@@ -17,10 +15,8 @@ case class CommitRequest[F[_]](promise: async.Promise[F, Either[Throwable, Unit]
 }
 
 object CommitRequest {
-  def apply[F[_]: Effect](topic: String, partition: Int, offset: Long)(
-    implicit ec: ExecutionContext): F[CommitRequest[F]] =
-    async.Promise
-      .empty[F, Either[Throwable, Unit]]
+  def apply[F[_]: Concurrent](topic: String, partition: Int, offset: Long): F[CommitRequest[F]] =
+    Deferred[F, Either[Throwable, Unit]]
       .map(CommitRequest(_, topic, partition, offset))
 }
 

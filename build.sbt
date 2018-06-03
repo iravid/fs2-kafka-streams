@@ -13,8 +13,9 @@ lazy val root = (project in file(".")).settings(
   libraryDependencies ++= Seq(
     "org.apache.kafka" % "kafka-clients" % "1.1.0",
     "org.typelevel"    %% "cats-core"    % "1.1.0",
-    "org.typelevel"    %% "cats-effect"  % "0.10.1",
-    "co.fs2"           %% "fs2-core"     % "0.10.5"
+    "org.typelevel"    %% "cats-effect"  % "1.0.0-RC2",
+    "co.fs2"           %% "fs2-core"     % "1.0.0-M1",
+    "org.rocksdb"      % "rocksdbjni"    % "5.13.2"
   ),
   scalacOptions ++= Seq(
     "-deprecation", // Emit warning and location for usages of deprecated APIs.

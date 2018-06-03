@@ -1,11 +1,12 @@
 package com.iravid.fs2.kafka.client
 
+import cats.effect.Resource
+import cats.effect.concurrent.Deferred
 import cats.effect.{ Concurrent, ConcurrentEffect, Sync, Timer }
 import cats.implicits._
 import com.iravid.fs2.kafka.client.codecs.KafkaDecoder
 import fs2.{ async, Stream }
 import java.util.Properties
-import scala.concurrent.ExecutionContext
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -15,17 +16,16 @@ case class Consumer[F[_], T](commitQueue: CommitQueue[F],
 object Consumer {
   import KafkaConsumerFunctions._
 
-  def resources[F[_]: ConcurrentEffect](
-    settings: Properties,
-    maxPendingCommits: Int,
-    bufferSize: Int,
-    pollInterval: FiniteDuration,
-    pollTimeout: FiniteDuration)(implicit ec: ExecutionContext, timer: Timer[F]) =
+  def resources[F[_]: ConcurrentEffect](settings: Properties,
+                                        maxPendingCommits: Int,
+                                        bufferSize: Int,
+                                        pollInterval: FiniteDuration,
+                                        pollTimeout: FiniteDuration)(implicit timer: Timer[F]) =
     for {
       consumer            <- createConsumer[F](settings)
       commitQueue         <- CommitQueue.create[F](maxPendingCommits)
       outQueue            <- async.boundedQueue[F, ByteRecord](bufferSize)
-      pollingLoopShutdown <- async.Promise.empty[F, Either[Throwable, Unit]]
+      pollingLoopShutdown <- Deferred[F, Either[Throwable, Unit]]
       commits = commitQueue.queue.dequeue
       polls   = Stream(Poll) ++ Stream.repeatEval(timer.sleep(pollInterval).as(Poll))
       _ <- Concurrent[F].start {
@@ -46,29 +46,28 @@ object Consumer {
           }
     } yield (commitQueue, outQueue, pollingLoopShutdown.complete(Right(())), consumer)
 
-  def apply[F[_]: ConcurrentEffect, T: KafkaDecoder](settings: Properties,
-                                                     subscription: Subscription,
-                                                     maxPendingCommits: Int,
-                                                     bufferSize: Int,
-                                                     pollInterval: FiniteDuration,
-                                                     pollTimeout: FiniteDuration)(
-    implicit ec: ExecutionContext,
-    timer: Timer[F]): Stream[F, Consumer[F, T]] =
-    Stream
-      .bracket(resources[F](settings, maxPendingCommits, bufferSize, pollInterval, pollTimeout))(
-        {
-          case (commitQueue, outQueue, _, consumer) =>
-            Stream.eval {
-              subscribe(consumer, subscription, None)
-                .as(Consumer(commitQueue, outQueue.dequeue through deserialize[F, T]))
-            }
-        }, {
-          case (_, _, shutdown, consumer) =>
-            for {
-              _ <- Sync[F].delay(consumer.unsubscribe())
-              _ <- shutdown
-              _ <- Sync[F].delay(consumer.close())
-            } yield ()
+  def apply[F[_]: ConcurrentEffect, T: KafkaDecoder](
+    settings: Properties,
+    subscription: Subscription,
+    maxPendingCommits: Int,
+    bufferSize: Int,
+    pollInterval: FiniteDuration,
+    pollTimeout: FiniteDuration)(implicit timer: Timer[F]): Resource[F, Consumer[F, T]] = {
+    val res = resources[F](settings, maxPendingCommits, bufferSize, pollInterval, pollTimeout)
+
+    Resource.make(res) {
+      case (_, _, shutdown, consumer) =>
+        for {
+          _ <- Sync[F].delay(consumer.unsubscribe())
+          _ <- shutdown
+          _ <- Sync[F].delay(consumer.close())
+        } yield ()
+    } flatMap {
+      case (commitQueue, outQueue, _, consumer) =>
+        Resource.liftF {
+          subscribe(consumer, subscription, None)
+            .as(Consumer(commitQueue, outQueue.dequeue through deserialize[F, T]))
         }
-      )
+    }
+  }
 }
