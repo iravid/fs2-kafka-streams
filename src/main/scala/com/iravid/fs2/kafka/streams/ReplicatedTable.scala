@@ -2,17 +2,33 @@ package com.iravid.fs2.kafka.streams
 
 import cats.effect.Sync
 import cats.implicits._
+import fs2.Stream
 import org.rocksdb.RocksDB
 
-trait ReplicatedTable[F[_], K, V] {
+trait Table[F[_], K, V] {
   def get(k: K): F[Option[V]]
 
   def set(k: K, v: V): F[Unit]
+
+  def replicateTo(topic: String): F[ReplicatedTable[F, K, V]]
 }
 
-object ReplicatedTable {
-  // TODO: Should be Resource[F,...] and bracket the RocksDB open
-  def apply[F[_], K, V]: F[ReplicatedTable[F, K, V]] = ???
+trait ReplicatedTable[F[_], K, V] extends Table[F, K, V] {
+  def changelog: F[Stream[F, (K, V)]] // or maybe use the consumer here
+}
+
+trait ReadOnlyReplicatedTable[F[_], K, V] {
+  def get(k: K): F[Option[V]]
+
+  def detach: F[Table[F, K, V]]
+}
+
+object Table {
+  def fromExistingTopic[F[_], K, V](topic: String): ReadOnlyReplicatedTable[F, K, V] = ???
+
+  def local[F[_], K, V](path: String): Table[F, K, V] = ???
+
+  // maybe add a builders class - local(path).replicated, local(path).unreplicated
 }
 
 trait ByteArrayCodec[T] {
