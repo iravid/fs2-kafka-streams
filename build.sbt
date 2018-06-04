@@ -8,14 +8,17 @@ lazy val root = (project in file(".")).settings(
       version := "0.1.0-SNAPSHOT"
     )),
   name := "fs2-kafka-streams",
+  autoCompilerPlugins := true,
   addCompilerPlugin("org.spire-math" %% "kind-projector" % "0.9.4"),
+  addCompilerPlugin("com.lihaoyi"    %% "acyclic"        % "0.1.7"),
   scalafmtOnCompile := true,
   libraryDependencies ++= Seq(
     "org.apache.kafka" % "kafka-clients" % "1.1.0",
     "org.typelevel"    %% "cats-core"    % "1.1.0",
     "org.typelevel"    %% "cats-effect"  % "1.0.0-RC2",
     "co.fs2"           %% "fs2-core"     % "1.0.0-M1",
-    "org.rocksdb"      % "rocksdbjni"    % "5.13.2"
+    "org.rocksdb"      % "rocksdbjni"    % "5.13.2",
+    "com.lihaoyi"      %% "acyclic"      % "0.1.7" % "provided"
   ),
   scalacOptions ++= Seq(
     "-deprecation", // Emit warning and location for usages of deprecated APIs.
@@ -63,6 +66,7 @@ lazy val root = (project in file(".")).settings(
     "-Ywarn-unused:params", // Warn if a value parameter is unused.
     "-Ywarn-unused:patvars", // Warn if a variable bound in a pattern is unused.
     "-Ywarn-unused:privates", // Warn if a private member is unused.
-    "-Ywarn-value-discard" // Warn when non-Unit expression results are unused.
+    "-Ywarn-value-discard", // Warn when non-Unit expression results are unused.
+    "-P:acyclic:force"
   )
 )

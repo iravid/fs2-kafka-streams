@@ -1,34 +1,87 @@
 package com.iravid.fs2.kafka.streams
 
-import cats.effect.Sync
+import cats.effect.{ Concurrent, Sync }
+import cats.effect.concurrent.{ Deferred, Ref }
+import cats.effect.implicits._
 import cats.implicits._
+import cats.effect.Resource
 import fs2.Stream
 import org.rocksdb.RocksDB
 
-trait Table[F[_], K, V] {
+trait ReadOnlyTable[F[_], K, V] {
   def get(k: K): F[Option[V]]
+}
 
+trait Table[F[_], K, V] extends ReadOnlyTable[F, K, V] {
   def set(k: K, v: V): F[Unit]
 
-  def replicateTo(topic: String): F[ReplicatedTable[F, K, V]]
-}
-
-trait ReplicatedTable[F[_], K, V] extends Table[F, K, V] {
-  def changelog: F[Stream[F, (K, V)]] // or maybe use the consumer here
-}
-
-trait ReadOnlyReplicatedTable[F[_], K, V] {
-  def get(k: K): F[Option[V]]
-
-  def detach: F[Table[F, K, V]]
+  def delete(k: K): F[Unit]
 }
 
 object Table {
-  def fromExistingTopic[F[_], K, V](topic: String): ReadOnlyReplicatedTable[F, K, V] = ???
+  def inMemoryFromStream[F[_]: Concurrent, K, V](
+    stream: Stream[F, (K, V)]): Resource[F, ReadOnlyTable[F, K, V]] = {
+    val resources = for {
+      ref      <- Ref[F].of(Map[K, V]())
+      shutdown <- Deferred[F, Either[Throwable, Unit]]
+      updateProcess <- stream
+                        .interruptWhen(shutdown.get)
+                        .evalMap(pair => ref.update(_ + pair))
+                        .compile
+                        .drain
+                        .start
+      table = new ReadOnlyTable[F, K, V] {
+        def get(k: K): F[Option[V]] = ref.get.map(_.get(k))
+      }
+    } yield (shutdown, table)
 
-  def local[F[_], K, V](path: String): Table[F, K, V] = ???
+    Resource
+      .make(resources) {
+        case (shutdown, _) =>
+          shutdown.complete(Right(()))
+      }
+      .map(_._2)
+  }
 
-  // maybe add a builders class - local(path).replicated, local(path).unreplicated
+  def persistentFromStream[F[_]: Concurrent, K: ByteArrayCodec, V: ByteArrayCodec](
+    path: String,
+    stream: Stream[F, (K, V)]): Resource[F, ReadOnlyTable[F, K, V]] = {
+    val resources = for {
+      rocksdb <- Sync[F].delay {
+                  RocksDB.open(path)
+                }
+      shutdown <- Deferred[F, Either[Throwable, Unit]]
+      updateProcess <- stream
+                        .interruptWhen(shutdown.get)
+                        .evalMap {
+                          case (key, value) =>
+                            Sync[F].delay {
+                              val serializedKey = ByteArrayCodec[K].encode(key)
+                              val serializedValue = ByteArrayCodec[V].encode(value)
+
+                              rocksdb.put(serializedKey, serializedValue)
+                            }
+                        }
+                        .compile
+                        .drain
+                        .start
+      table = new ReadOnlyTable[F, K, V] {
+        def get(k: K): F[Option[V]] =
+          Sync[F].delay {
+            Option(rocksdb.get(ByteArrayCodec[K].encode(k))).traverse(ByteArrayCodec[V].decode(_))
+          }.rethrow
+      }
+    } yield (rocksdb, shutdown, table)
+
+    Resource
+      .make(resources) {
+        case (rocksdb, shutdown, _) =>
+          shutdown.complete(Right(())) *>
+            Sync[F].delay(rocksdb.close())
+      }
+      .map(_._3)
+  }
+
 }
 
 trait ByteArrayCodec[T] {
@@ -38,16 +91,4 @@ trait ByteArrayCodec[T] {
 
 object ByteArrayCodec {
   def apply[T: ByteArrayCodec]: ByteArrayCodec[T] = implicitly
-}
-
-class RocksDBReplicatedTable[F[_]: Sync, K: ByteArrayCodec, V: ByteArrayCodec](db: RocksDB)
-    extends ReplicatedTable[F, K, V] {
-  def get(k: K): F[Option[V]] =
-    Sync[F].delay {
-      Option(db.get(ByteArrayCodec[K].encode(k))).traverse(ByteArrayCodec[V].decode(_))
-    }.rethrow
-
-  def set(k: K, v: V): F[Unit] = Sync[F].delay {
-    db.put(ByteArrayCodec[K].encode(k), ByteArrayCodec[V].encode(v))
-  }
 }

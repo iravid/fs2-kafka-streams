@@ -4,7 +4,8 @@ import cats.effect.Resource
 import cats.effect.concurrent.Deferred
 import cats.effect.{ Concurrent, ConcurrentEffect, Sync, Timer }
 import cats.implicits._
-import com.iravid.fs2.kafka.client.codecs.KafkaDecoder
+import com.iravid.fs2.kafka.codecs.KafkaDecoder
+import com.iravid.fs2.kafka.model.{ ByteRecord, ConsumerMessage, Result }
 import fs2.{ async, Stream }
 import java.util.Properties
 

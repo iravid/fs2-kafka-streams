@@ -2,7 +2,9 @@ package com.iravid.fs2.kafka.client
 
 import cats.Id
 import cats.effect.{ Async, Resource, Sync }
-import com.iravid.fs2.kafka.client.codecs.KafkaEncoder
+import com.iravid.fs2.kafka.EnvT
+import com.iravid.fs2.kafka.codecs.KafkaEncoder
+import com.iravid.fs2.kafka.model.{ ByteProducerRecord, ProducerResult }
 import java.util.Properties
 import org.apache.kafka.clients.producer.{ Callback, RecordMetadata }
 import org.apache.kafka.common.header.Header

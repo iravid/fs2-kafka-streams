@@ -1,6 +1,6 @@
-package com.iravid.fs2.kafka.client.codecs
+package com.iravid.fs2.kafka.codecs
 
-import com.iravid.fs2.kafka.client.{ ByteRecord, Result }
+import com.iravid.fs2.kafka.model.{ ByteRecord, Result }
 import cats.MonadError
 import scala.annotation.tailrec
 

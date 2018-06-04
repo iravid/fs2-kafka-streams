@@ -2,7 +2,9 @@ package com.iravid.fs2.kafka.client
 
 import cats.effect.{ Async, Sync }
 import cats.implicits._
-import com.iravid.fs2.kafka.client.codecs.KafkaDecoder
+import com.iravid.fs2.kafka.EnvT
+import com.iravid.fs2.kafka.codecs.KafkaDecoder
+import com.iravid.fs2.kafka.model.{ ByteRecord, ConsumerMessage, Result }
 import fs2.Pipe
 import java.util.Properties
 import org.apache.kafka.clients.consumer.internals.NoOpConsumerRebalanceListener

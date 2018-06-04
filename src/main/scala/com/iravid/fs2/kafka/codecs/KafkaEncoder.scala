@@ -1,4 +1,4 @@
-package com.iravid.fs2.kafka.client.codecs
+package com.iravid.fs2.kafka.codecs
 
 import cats.Contravariant
 

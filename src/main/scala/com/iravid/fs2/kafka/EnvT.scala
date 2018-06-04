@@ -1,4 +1,4 @@
-package com.iravid.fs2.kafka.client
+package com.iravid.fs2.kafka
 
 import cats.{ Applicative, Eval, Traverse }
 
