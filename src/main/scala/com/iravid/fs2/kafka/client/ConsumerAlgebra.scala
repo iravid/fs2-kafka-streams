@@ -5,7 +5,7 @@ import cats.implicits._
 import cats.effect.{ ConcurrentEffect, Timer }
 import com.iravid.fs2.kafka.model.ByteRecord
 import java.util.{ Collection => JCollection, Properties }
-import org.apache.kafka.clients.consumer.{ ConsumerRebalanceListener, OffsetCommitCallback }
+import org.apache.kafka.clients.consumer.ConsumerRebalanceListener
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.errors.WakeupException
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
@@ -14,7 +14,7 @@ import scala.concurrent.duration.FiniteDuration
 import scala.collection.JavaConverters._
 
 trait Consumer[F[_]] {
-  def commit(data: OffsetMap): F[OffsetMap]
+  def commit(data: OffsetMap): F[Unit]
 
   def poll(pollTimeout: FiniteDuration, wakeupTimeout: FiniteDuration): F[List[ByteRecord]]
 
@@ -25,17 +25,8 @@ trait Consumer[F[_]] {
 
 class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F], timer: Timer[F])
     extends Consumer[F] {
-  def commit(data: OffsetMap): F[OffsetMap] =
-    F.async { cb =>
-      consumer.commitAsync(
-        data.asJava,
-        new OffsetCommitCallback {
-          override def onComplete(metadata: JOffsetMap, exception: Exception): Unit =
-            if (exception eq null) cb(Right(metadata.asScala.toMap))
-            else cb(Left(exception))
-        }
-      )
-    }
+  def commit(data: OffsetMap): F[Unit] =
+    F.delay(consumer.commitSync(data.asJava))
 
   def poll(pollTimeout: FiniteDuration, wakeupTimeout: FiniteDuration): F[List[ByteRecord]] =
     F.race(
@@ -73,13 +64,13 @@ class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F
   def unsubscribe: F[Unit] = F.delay(consumer.unsubscribe())
 }
 
-object Consumer {
+object KafkaConsumer {
   def consumer[F[_]](settings: Properties)(implicit F: Sync[F]) =
     Resource.make(
       F.delay(new ByteConsumer(settings, new ByteArrayDeserializer, new ByteArrayDeserializer))
     )(consumer => F.delay(consumer.close()))
 
-  def apply[F[_]](settings: Properties)(implicit F: ConcurrentEffect[F],
-                                        timer: Timer[F]): Resource[F, Consumer[F]] =
-    consumer(settings).map(new KafkaConsumer(_))
+  def apply[F[_]](settings: ConsumerSettings)(implicit F: ConcurrentEffect[F],
+                                              timer: Timer[F]): Resource[F, Consumer[F]] =
+    consumer(settings.driverProperties).map(new KafkaConsumer(_))
 }

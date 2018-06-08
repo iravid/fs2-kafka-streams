@@ -13,8 +13,8 @@ case class RecordStream[F[_], T](commitQueue: CommitQueue[F],
                                  records: Stream[F, ConsumerMessage[Result, T]])
 
 object RecordStream {
-  def resources[F[_]: ConcurrentEffect](settings: ConsumerSettings)(implicit timer: Timer[F],
-                                                                    consumer: Consumer[F]) =
+  def resources[F[_]: ConcurrentEffect](settings: ConsumerSettings, consumer: Consumer[F])(
+    implicit timer: Timer[F]) =
     for {
       commitQueue         <- CommitQueue.create[F](settings.maxPendingCommits)
       outQueue            <- async.boundedQueue[F, ByteRecord](settings.outputBufferSize)
@@ -26,8 +26,8 @@ object RecordStream {
               .either(polls)
               .interruptWhen(pollingLoopShutdown.get)
               .evalMap {
-                case Left(req) =>
-                  (consumer.commit(req.asOffsetMap).void.attempt >>= req.promise.complete).void
+                case Left((deferred, req)) =>
+                  (consumer.commit(req.asOffsetMap).void.attempt >>= deferred.complete).void
                 case Right(Poll) =>
                   for {
                     records <- consumer.poll(settings.pollTimeout, settings.wakeupTimeout)
@@ -39,11 +39,11 @@ object RecordStream {
           }
     } yield (commitQueue, outQueue, pollingLoopShutdown.complete(Right(())))
 
-  def apply[F[_]: ConcurrentEffect, T: KafkaDecoder](settings: ConsumerSettings,
-                                                     subscription: Subscription)(
-    implicit timer: Timer[F],
-    consumer: Consumer[F]): Resource[F, RecordStream[F, T]] =
-    Resource.make(resources[F](settings)) {
+  def apply[F[_]: ConcurrentEffect, T: KafkaDecoder](
+    settings: ConsumerSettings,
+    consumer: Consumer[F],
+    subscription: Subscription)(implicit timer: Timer[F]): Resource[F, RecordStream[F, T]] =
+    Resource.make(resources[F](settings, consumer)) {
       case (_, _, shutdown) =>
         for {
           _ <- consumer.unsubscribe
