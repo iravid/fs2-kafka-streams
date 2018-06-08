@@ -5,12 +5,11 @@ import cats.effect.concurrent.{ Deferred, Ref }
 import com.iravid.fs2.kafka.codecs.KafkaDecoder
 import com.iravid.fs2.kafka.model.{ ByteRecord, ConsumerMessage, Result }
 import fs2._
-import java.util.{ Collection => JCollection, Properties }
+import java.util.{ Collection => JCollection }
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener
 import org.apache.kafka.common.TopicPartition
 
 import scala.collection.JavaConverters._
-import scala.concurrent.duration._
 
 case class PartitionedConsumer[F[_], T](
   commitQueue: CommitQueue[F],
@@ -42,16 +41,11 @@ object PartitionedConsumer {
   }
 
   def resources[F[_]: ConcurrentEffect, T: KafkaDecoder](
-    settings: Properties,
-    maxPendingCommits: Int,
-    partitionBufferSize: Int,
-    pollTimeout: FiniteDuration,
-    pollInterval: FiniteDuration,
-    wakeupTimeout: FiniteDuration
+    settings: ConsumerSettings
   )(implicit timer: Timer[F]) =
     for {
-      consumer         <- createConsumer[F](settings)
-      commitQueue      <- CommitQueue.create[F](maxPendingCommits)
+      consumer         <- createConsumer[F](settings.driverProperties)
+      commitQueue      <- CommitQueue.create[F](settings.maxPendingCommits)
       partitionTracker <- Ref[F].of(Map.empty[TopicPartition, PartitionHandle[F]])
       partitionsOut <- async
                         .unboundedQueue[F, (TopicPartition, Stream[F, ConsumerMessage[Result, T]])]
@@ -72,7 +66,7 @@ object PartitionedConsumer {
       }
 
       commits    = commitQueue.queue.dequeue
-      polls      = Stream(Poll) ++ Stream.repeatEval(timer.sleep(pollInterval).as(Poll))
+      polls      = Stream(Poll) ++ Stream.repeatEval(timer.sleep(settings.pollInterval).as(Poll))
       rebalances = rebalanceQueue.dequeue
 
       pollingLoopShutdown <- Deferred[F, Either[Throwable, Unit]]
@@ -87,7 +81,7 @@ object PartitionedConsumer {
                   (commit(consumer, req.asOffsetMap).void.attempt >>= req.promise.complete).void
                 case Left(Right(Poll)) =>
                   for {
-                    records <- poll(consumer, pollTimeout, wakeupTimeout)
+                    records <- poll(consumer, settings.pollTimeout, settings.wakeupTimeout)
                     tracker <- partitionTracker.get
                     _ <- records.traverse_ { record =>
                           tracker
@@ -100,7 +94,8 @@ object PartitionedConsumer {
                   for {
                     tracker <- partitionTracker.get
                     handles <- partitions.traverse(
-                                PartitionHandle.fromTopicPartition(_, partitionBufferSize))
+                                PartitionHandle
+                                  .fromTopicPartition(_, settings.partitionOutputBufferSize))
                     _ <- partitionTracker.set(tracker ++ handles)
                     _ <- handles.traverse_ {
                           case (tp, h) =>
@@ -127,24 +122,12 @@ object PartitionedConsumer {
         consumer,
         rebalanceListener)
 
-  def apply[F[_]: ConcurrentEffect, T: KafkaDecoder](settings: Properties,
-                                                     subscription: Subscription,
-                                                     maxPendingCommits: Int,
-                                                     partitionBufferSize: Int,
-                                                     pollTimeout: FiniteDuration,
-                                                     pollInterval: FiniteDuration,
-                                                     wakeupTimeout: FiniteDuration)(
+  def apply[F[_]: ConcurrentEffect, T: KafkaDecoder](settings: ConsumerSettings,
+                                                     subscription: Subscription)(
     implicit
     timer: Timer[F]): Resource[F, PartitionedConsumer[F, T]] =
     Resource
-      .make(
-        resources(
-          settings,
-          maxPendingCommits,
-          partitionBufferSize,
-          pollTimeout,
-          pollInterval,
-          wakeupTimeout)) {
+      .make(resources(settings)) {
         case (_, _, shutdown, consumer, _) =>
           for {
             _ <- Sync[F].delay(consumer.unsubscribe())

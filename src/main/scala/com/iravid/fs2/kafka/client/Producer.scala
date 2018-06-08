@@ -5,7 +5,7 @@ import cats.effect.{ Async, Resource, Sync }
 import com.iravid.fs2.kafka.EnvT
 import com.iravid.fs2.kafka.codecs.KafkaEncoder
 import com.iravid.fs2.kafka.model.{ ByteProducerRecord, ProducerResult }
-import java.util.Properties
+import java.util.concurrent.TimeUnit
 import org.apache.kafka.clients.producer.{ Callback, RecordMetadata }
 import org.apache.kafka.common.header.Header
 import org.apache.kafka.common.serialization.ByteArraySerializer
@@ -13,10 +13,11 @@ import org.apache.kafka.common.serialization.ByteArraySerializer
 import scala.collection.JavaConverters._
 
 object Producer {
-  def create[F[_]: Sync](settings: Properties): Resource[F, ByteProducer] =
+  def create[F[_]: Sync](settings: ProducerSettings): Resource[F, ByteProducer] =
     Resource.make(Sync[F].delay {
-      new ByteProducer(settings, new ByteArraySerializer, new ByteArraySerializer)
-    })(producer => Sync[F].delay(producer.close()))
+      new ByteProducer(settings.driverProperties, new ByteArraySerializer, new ByteArraySerializer)
+    })(producer =>
+      Sync[F].delay(producer.close(settings.closeTimeout.toMillis, TimeUnit.MILLISECONDS)))
 
   def toProducerRecord[T: KafkaEncoder](t: T,
                                         topic: String,
