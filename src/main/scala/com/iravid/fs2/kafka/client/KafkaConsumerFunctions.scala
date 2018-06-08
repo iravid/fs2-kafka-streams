@@ -1,6 +1,6 @@
 package com.iravid.fs2.kafka.client
 
-import cats.effect.{ Async, Sync }
+import cats.effect.{ Async, ConcurrentEffect, Sync, Timer }
 import cats.implicits._
 import com.iravid.fs2.kafka.EnvT
 import com.iravid.fs2.kafka.codecs.KafkaDecoder
@@ -9,6 +9,7 @@ import fs2.Pipe
 import java.util.Properties
 import org.apache.kafka.clients.consumer.internals.NoOpConsumerRebalanceListener
 import org.apache.kafka.clients.consumer.{ ConsumerRebalanceListener, OffsetCommitCallback }
+import org.apache.kafka.common.errors.WakeupException
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
 
 import scala.collection.JavaConverters._
@@ -30,8 +31,22 @@ object KafkaConsumerFunctions {
       )
     }
 
-  def poll[F[_]: Sync](consumer: ByteConsumer, timeout: FiniteDuration): F[List[ByteRecord]] =
-    Sync[F].delay(consumer.poll(timeout.toMillis).iterator().asScala.toList)
+  def poll[F[_]](consumer: ByteConsumer,
+                 pollTimeout: FiniteDuration,
+                 wakeupTimeout: FiniteDuration)(implicit F: ConcurrentEffect[F],
+                                                timer: Timer[F]): F[List[ByteRecord]] =
+    F.race(
+      timer.sleep(wakeupTimeout),
+      F.cancelable[List[ByteRecord]] { cb =>
+        val pollTask = F.delay(consumer.poll(pollTimeout.toMillis).iterator.asScala.toList)
+        F.toIO(timer.shift *> pollTask).unsafeRunAsync(cb)
+
+        F.toIO(F.delay(consumer.wakeup()))
+      }
+    ) flatMap {
+      case Left(_)       => F.raiseError(new WakeupException)
+      case Right(result) => F.pure(result)
+    }
 
   def subscribe[F[_]: Sync](consumer: ByteConsumer,
                             subscription: Subscription,

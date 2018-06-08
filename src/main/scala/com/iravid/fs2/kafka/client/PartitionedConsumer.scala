@@ -46,7 +46,8 @@ object PartitionedConsumer {
     maxPendingCommits: Int,
     partitionBufferSize: Int,
     pollTimeout: FiniteDuration,
-    pollInterval: FiniteDuration
+    pollInterval: FiniteDuration,
+    wakeupTimeout: FiniteDuration
   )(implicit timer: Timer[F]) =
     for {
       consumer         <- createConsumer[F](settings)
@@ -86,7 +87,7 @@ object PartitionedConsumer {
                   (commit(consumer, req.asOffsetMap).void.attempt >>= req.promise.complete).void
                 case Left(Right(Poll)) =>
                   for {
-                    records <- poll(consumer, pollTimeout)
+                    records <- poll(consumer, pollTimeout, wakeupTimeout)
                     tracker <- partitionTracker.get
                     _ <- records.traverse_ { record =>
                           tracker
@@ -131,11 +132,19 @@ object PartitionedConsumer {
                                                      maxPendingCommits: Int,
                                                      partitionBufferSize: Int,
                                                      pollTimeout: FiniteDuration,
-                                                     pollInterval: FiniteDuration)(
+                                                     pollInterval: FiniteDuration,
+                                                     wakeupTimeout: FiniteDuration)(
     implicit
     timer: Timer[F]): Resource[F, PartitionedConsumer[F, T]] =
     Resource
-      .make(resources(settings, maxPendingCommits, partitionBufferSize, pollTimeout, pollInterval)) {
+      .make(
+        resources(
+          settings,
+          maxPendingCommits,
+          partitionBufferSize,
+          pollTimeout,
+          pollInterval,
+          wakeupTimeout)) {
         case (_, _, shutdown, consumer, _) =>
           for {
             _ <- Sync[F].delay(consumer.unsubscribe())

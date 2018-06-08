@@ -21,7 +21,8 @@ object Consumer {
                                         maxPendingCommits: Int,
                                         bufferSize: Int,
                                         pollInterval: FiniteDuration,
-                                        pollTimeout: FiniteDuration)(implicit timer: Timer[F]) =
+                                        pollTimeout: FiniteDuration,
+                                        wakeupTimeout: FiniteDuration)(implicit timer: Timer[F]) =
     for {
       consumer            <- createConsumer[F](settings)
       commitQueue         <- CommitQueue.create[F](maxPendingCommits)
@@ -38,7 +39,7 @@ object Consumer {
                   (commit(consumer, req.asOffsetMap).void.attempt >>= req.promise.complete).void
                 case Right(Poll) =>
                   for {
-                    records <- poll(consumer, pollTimeout)
+                    records <- poll(consumer, pollTimeout, wakeupTimeout)
                     _       <- records.traverse_(outQueue.enqueue1)
                   } yield ()
               }
@@ -53,8 +54,15 @@ object Consumer {
     maxPendingCommits: Int,
     bufferSize: Int,
     pollInterval: FiniteDuration,
-    pollTimeout: FiniteDuration)(implicit timer: Timer[F]): Resource[F, Consumer[F, T]] = {
-    val res = resources[F](settings, maxPendingCommits, bufferSize, pollInterval, pollTimeout)
+    pollTimeout: FiniteDuration,
+    wakeupTimeout: FiniteDuration)(implicit timer: Timer[F]): Resource[F, Consumer[F, T]] = {
+    val res = resources[F](
+      settings,
+      maxPendingCommits,
+      bufferSize,
+      pollInterval,
+      pollTimeout,
+      wakeupTimeout)
 
     Resource.make(res) {
       case (_, _, shutdown, consumer) =>
