@@ -2,28 +2,17 @@ package com.iravid.fs2.kafka.client
 
 import cats.effect._, cats.implicits._
 import cats.effect.concurrent.{ Deferred, Ref }
+import com.iravid.fs2.kafka.EnvT
 import com.iravid.fs2.kafka.codecs.KafkaDecoder
 import com.iravid.fs2.kafka.model.{ ByteRecord, ConsumerMessage, Result }
 import fs2._
-import java.util.{ Collection => JCollection }
-import org.apache.kafka.clients.consumer.ConsumerRebalanceListener
 import org.apache.kafka.common.TopicPartition
 
-import scala.collection.JavaConverters._
-
-case class PartitionedConsumer[F[_], T](
+case class PartitionedRecordStream[F[_], T](
   commitQueue: CommitQueue[F],
   records: Stream[F, (TopicPartition, Stream[F, ConsumerMessage[Result, T]])])
 
-object PartitionedConsumer {
-  import KafkaConsumerFunctions._
-
-  sealed trait Rebalance
-  object Rebalance {
-    case class Assign(partitions: List[TopicPartition]) extends Rebalance
-    case class Revoke(partitions: List[TopicPartition]) extends Rebalance
-  }
-
+object PartitionedRecordStream {
   case class PartitionHandle[F[_]](data: async.mutable.Queue[F, ByteRecord],
                                    interruption: Deferred[F, Either[Throwable, Unit]]) {
     def records(implicit F: Concurrent[F]): Stream[F, ByteRecord] =
@@ -42,28 +31,15 @@ object PartitionedConsumer {
 
   def resources[F[_]: ConcurrentEffect, T: KafkaDecoder](
     settings: ConsumerSettings
-  )(implicit timer: Timer[F]) =
+  )(implicit timer: Timer[F], consumer: Consumer[F]) =
     for {
-      consumer         <- createConsumer[F](settings.driverProperties)
       commitQueue      <- CommitQueue.create[F](settings.maxPendingCommits)
       partitionTracker <- Ref[F].of(Map.empty[TopicPartition, PartitionHandle[F]])
       partitionsOut <- async
                         .unboundedQueue[F, (TopicPartition, Stream[F, ConsumerMessage[Result, T]])]
 
       rebalanceQueue <- async.synchronousQueue[F, Rebalance]
-      rebalanceListener = new ConsumerRebalanceListener {
-        def onPartitionsAssigned(jpartitions: JCollection[TopicPartition]): Unit =
-          Effect[F]
-            .runAsync(rebalanceQueue.enqueue1(Rebalance.Assign(jpartitions.asScala.toList)))(_ =>
-              IO.unit)
-            .unsafeRunSync()
-
-        def onPartitionsRevoked(jpartitions: JCollection[TopicPartition]): Unit =
-          Effect[F]
-            .runAsync(rebalanceQueue.enqueue1(Rebalance.Revoke(jpartitions.asScala.toList)))(_ =>
-              IO.unit)
-            .unsafeRunSync()
-      }
+      rebalanceListener: Rebalance.Listener[F] = rebalanceQueue.enqueue1(_)
 
       commits    = commitQueue.queue.dequeue
       polls      = Stream(Poll) ++ Stream.repeatEval(timer.sleep(settings.pollInterval).as(Poll))
@@ -78,10 +54,10 @@ object PartitionedConsumer {
               .interruptWhen(pollingLoopShutdown.get)
               .evalMap {
                 case Left(Left(req)) =>
-                  (commit(consumer, req.asOffsetMap).void.attempt >>= req.promise.complete).void
+                  (consumer.commit(req.asOffsetMap).void.attempt >>= req.promise.complete).void
                 case Left(Right(Poll)) =>
                   for {
-                    records <- poll(consumer, settings.pollTimeout, settings.wakeupTimeout)
+                    records <- consumer.poll(settings.pollTimeout, settings.wakeupTimeout)
                     tracker <- partitionTracker.get
                     _ <- records.traverse_ { record =>
                           tracker
@@ -114,32 +90,30 @@ object PartitionedConsumer {
               .compile
               .drain
           }
-    } yield
-      (
-        commitQueue,
-        partitionsOut,
-        pollingLoopShutdown.complete(Right(())),
-        consumer,
-        rebalanceListener)
+    } yield (commitQueue, partitionsOut, pollingLoopShutdown.complete(Right(())), rebalanceListener)
 
   def apply[F[_]: ConcurrentEffect, T: KafkaDecoder](settings: ConsumerSettings,
                                                      subscription: Subscription)(
     implicit
-    timer: Timer[F]): Resource[F, PartitionedConsumer[F, T]] =
+    timer: Timer[F],
+    consumer: Consumer[F]): Resource[F, PartitionedRecordStream[F, T]] =
     Resource
       .make(resources(settings)) {
-        case (_, _, shutdown, consumer, _) =>
+        case (_, _, shutdown, _) =>
           for {
-            _ <- Sync[F].delay(consumer.unsubscribe())
+            _ <- consumer.unsubscribe
             _ <- shutdown
-            _ <- Sync[F].delay(consumer.close())
           } yield ()
       }
       .flatMap {
-        case (commitQueue, partitionsOut, _, consumer, rebalanceListener) =>
+        case (commitQueue, partitionsOut, _, rebalanceListener) =>
           Resource.liftF {
-            subscribe(consumer, subscription, Some(rebalanceListener))
-              .as(PartitionedConsumer(commitQueue, partitionsOut.dequeue))
+            consumer
+              .subscribe(subscription, rebalanceListener)
+              .as(PartitionedRecordStream(commitQueue, partitionsOut.dequeue))
           }
       }
+
+  def deserialize[F[_], T: KafkaDecoder]: Pipe[F, ByteRecord, ConsumerMessage[Result, T]] =
+    _.map(rec => EnvT(rec, KafkaDecoder[T].decode(rec)))
 }
