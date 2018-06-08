@@ -21,3 +21,11 @@ object CommitRequest {
 }
 
 case object Poll
+
+sealed trait Rebalance
+object Rebalance {
+  type Listener[F[_]] = Rebalance => F[Unit]
+
+  case class Assign(partitions: List[TopicPartition]) extends Rebalance
+  case class Revoke(partitions: List[TopicPartition]) extends Rebalance
+}
