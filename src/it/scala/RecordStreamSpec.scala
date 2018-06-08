@@ -64,10 +64,12 @@ class RecordStreamIntegrationSpec extends WordSpec with KafkaSettings {
       results <- recordStream(topic) use { recordStream =>
                   recordStream.records
                     .evalMap { record =>
-                      IO(println(record.fa.getOrElse("Error"))) *>
-                        recordStream.commitQueue.requestCommit(
-                          CommitRequest(record.env.topic, record.env.partition, record.env.offset)
-                        ) *> record.fa.pure[IO]
+                      val commitReq =
+                        CommitRequest(record.env.topic, record.env.partition, record.env.offset)
+                      IO {
+                        println(record.fa.getOrElse("Error"))
+                        record.fa
+                      } <* recordStream.commitQueue.requestCommit(commitReq)
                     }
                     .take(testData.length.toLong)
                     .compile
