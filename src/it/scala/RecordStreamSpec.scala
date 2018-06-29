@@ -2,16 +2,14 @@ package com.iravid.fs2.kafka.client
 
 import cats.implicits._
 import cats.effect.IO
+import com.iravid.fs2.kafka.UnitSpec
 import fs2.Stream
 import org.scalacheck.Gen
-import org.scalatest._
-import org.scalatest.prop.GeneratorDrivenPropertyChecks
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 
-class RecordStreamIntegrationSpec
-    extends WordSpec with Matchers with KafkaSettings with GeneratorDrivenPropertyChecks {
+class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
 
   def partitionedProgram(consumerSettings: ConsumerSettings,
                          producerSettings: ProducerSettings,
