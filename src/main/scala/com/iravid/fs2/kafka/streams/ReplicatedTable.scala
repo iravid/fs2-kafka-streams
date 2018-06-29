@@ -6,6 +6,7 @@ import cats.effect.implicits._
 import cats.implicits._
 import cats.effect.Resource
 import fs2.Stream
+import java.nio.charset.StandardCharsets
 import org.rocksdb.RocksDB
 
 trait ReadOnlyTable[F[_], K, V] {
@@ -91,4 +92,11 @@ trait ByteArrayCodec[T] {
 
 object ByteArrayCodec {
   def apply[T: ByteArrayCodec]: ByteArrayCodec[T] = implicitly
+
+  implicit val stringCodec: ByteArrayCodec[String] =
+    new ByteArrayCodec[String] {
+      def encode(t: String): Array[Byte] = t.getBytes(StandardCharsets.UTF_8)
+      def decode(bytes: Array[Byte]): Either[Throwable, String] =
+        Either.catchNonFatal(new String(bytes, StandardCharsets.UTF_8))
+    }
 }
