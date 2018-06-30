@@ -89,7 +89,7 @@ class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
       forAll((nonEmptyStr, "groupId"), (nonEmptyStr, "topic"), (Gen.listOf(Gen.alphaStr), "data")) {
         (groupId: String, topic: String, data: List[String]) =>
           val consumerSettings =
-            mkConsumerSettings(config.kafkaPort, groupId, (data.length * 2) max 1)
+            mkConsumerSettings(config.kafkaPort, groupId, 100)
           val producerSettings = mkProducerSettings(config.kafkaPort)
           val results =
             plainProgram(consumerSettings, producerSettings, topic, data)
@@ -97,6 +97,21 @@ class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
 
           results.collect { case Right(a) => a } should contain theSameElementsAs data
       }
+    }
+
+    "handle data lengths bigger than the buffer size" in withRunningKafkaOnFoundPort(kafkaConfig) {
+      config =>
+        forAll((nonEmptyStr, "groupId"), (nonEmptyStr, "topic"), (Gen.listOf(Gen.alphaStr), "data")) {
+          (groupId: String, topic: String, data: List[String]) =>
+            val consumerSettings =
+              mkConsumerSettings(config.kafkaPort, groupId, (data.length / 2) max 1)
+            val producerSettings = mkProducerSettings(config.kafkaPort)
+            val results =
+              plainProgram(consumerSettings, producerSettings, topic, data)
+                .unsafeRunSync()
+
+            results.collect { case Right(a) => a } should contain theSameElementsAs data
+        }
     }
   }
 
@@ -112,7 +127,7 @@ class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
           createCustomTopic(topic, partitions = partitions)
 
           val consumerSettings =
-            mkConsumerSettings(config.kafkaPort, groupId, (data.length * 2) max 1)
+            mkConsumerSettings(config.kafkaPort, groupId, 100)
           val producerSettings = mkProducerSettings(config.kafkaPort)
           val results =
             partitionedProgram(consumerSettings, producerSettings, topic, data)

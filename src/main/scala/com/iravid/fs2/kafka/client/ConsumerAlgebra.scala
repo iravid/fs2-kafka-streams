@@ -5,7 +5,7 @@ import cats.implicits._
 import cats.effect.{ ConcurrentEffect, Timer }
 import com.iravid.fs2.kafka.model.ByteRecord
 import java.util.{ Collection => JCollection, Properties }
-import org.apache.kafka.clients.consumer.ConsumerRebalanceListener
+import org.apache.kafka.clients.consumer.{ ConsumerRebalanceListener, ConsumerRecords }
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.errors.WakeupException
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
@@ -16,11 +16,16 @@ import scala.collection.JavaConverters._
 trait Consumer[F[_]] {
   def commit(data: OffsetMap): F[Unit]
 
-  def poll(pollTimeout: FiniteDuration, wakeupTimeout: FiniteDuration): F[List[ByteRecord]]
+  def poll(pollTimeout: FiniteDuration,
+           wakeupTimeout: FiniteDuration): F[Map[TopicPartition, List[ByteRecord]]]
 
   def subscribe(subscription: Subscription, listener: Rebalance.Listener[F]): F[Unit]
 
   def unsubscribe: F[Unit]
+
+  def pause(partitions: List[TopicPartition]): F[Unit]
+
+  def resume(partitions: List[TopicPartition]): F[Unit]
 }
 
 class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F], timer: Timer[F])
@@ -28,11 +33,35 @@ class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F
   def commit(data: OffsetMap): F[Unit] =
     F.delay(consumer.commitSync(data.asJava))
 
-  def poll(pollTimeout: FiniteDuration, wakeupTimeout: FiniteDuration): F[List[ByteRecord]] =
+  def adaptConsumerRecords(
+    records: ConsumerRecords[Array[Byte], Array[Byte]]): F[Map[TopicPartition, List[ByteRecord]]] =
+    F.delay {
+      val builder = Map.newBuilder[TopicPartition, List[ByteRecord]]
+      val partitions = records.partitions().iterator()
+
+      while (partitions.hasNext()) {
+        val partition = partitions.next()
+        val recordList = records.records(partition).iterator()
+        val recordsBuilder = List.newBuilder[ByteRecord]
+
+        while (recordList.hasNext()) {
+          recordsBuilder += recordList.next()
+        }
+
+        builder += partition -> recordsBuilder.result()
+      }
+
+      builder.result()
+    }
+
+  def poll(pollTimeout: FiniteDuration,
+           wakeupTimeout: FiniteDuration): F[Map[TopicPartition, List[ByteRecord]]] =
     F.race(
       timer.sleep(wakeupTimeout),
-      F.cancelable[List[ByteRecord]] { cb =>
-        val pollTask = F.delay(consumer.poll(pollTimeout.toMillis).iterator.asScala.toList)
+      F.cancelable[Map[TopicPartition, List[ByteRecord]]] { cb =>
+        val pollTask = F
+          .delay(consumer.poll(pollTimeout.toMillis))
+          .flatMap(adaptConsumerRecords)
         F.toIO(timer.shift *> pollTask).unsafeRunAsync(cb)
 
         F.toIO(F.delay(consumer.wakeup()))
@@ -62,6 +91,12 @@ class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F
   }
 
   def unsubscribe: F[Unit] = F.delay(consumer.unsubscribe())
+
+  def pause(partitions: List[TopicPartition]): F[Unit] =
+    F.delay(consumer.pause(partitions.asJava))
+
+  def resume(partitions: List[TopicPartition]): F[Unit] =
+    F.delay(consumer.resume(partitions.asJava))
 }
 
 object KafkaConsumer {
