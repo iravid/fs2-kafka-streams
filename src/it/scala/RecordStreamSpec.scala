@@ -21,7 +21,8 @@ class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
         recordStream <- RecordStream.partitioned[IO, String](
                          consumerSettings,
                          consumer,
-                         Subscription.Topics(List(topic)))
+                         Subscription.Topics(List(topic)),
+                         None)
       } yield recordStream
 
     for {
@@ -60,7 +61,8 @@ class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
                          .plain[IO, String](
                            consumerSettings,
                            consumer,
-                           Subscription.Topics(List(topic)))
+                           Subscription.Topics(List(topic)),
+                           None)
       } yield recordStream
 
     for {

@@ -33,20 +33,9 @@ object Customer {
 
       Right(Customer(userId, name))
     }
-
-  implicit val byteCodec: ByteArrayCodec[Customer] = new ByteArrayCodec[Customer] {
-    def encode(customer: Customer): Array[Byte] =
-      s"${customer.userId},${customer.name}".getBytes(StandardCharsets.UTF_8)
-    def decode(bytes: Array[Byte]): Either[Throwable, Customer] = {
-      val Array(userId, name) =
-        new String(bytes, StandardCharsets.UTF_8).split(",")
-
-      Right(Customer(userId, name))
-    }
-  }
 }
 
-class ReplicatedTableSpec extends UnitSpec with KafkaSettings {
+class ReadOnlyTableSpec extends UnitSpec with KafkaSettings {
   val userIdGen = Gen.oneOf("bob", "alice", "joe", "anyref")
 
   val customerGen = for {
@@ -62,7 +51,7 @@ class ReplicatedTableSpec extends UnitSpec with KafkaSettings {
       .interruptWhen(interrupt)
       .evalMap(Producer.produce[IO, Customer](producer, _, "customers", 0, None))
 
-  def customersConsumer(config: EmbeddedKafkaConfig) = {
+  def customersTable(config: EmbeddedKafkaConfig) = {
     val consumerSettings = mkConsumerSettings(config.kafkaPort, "customers_consumer", 1000)
 
     for {
@@ -70,17 +59,12 @@ class ReplicatedTableSpec extends UnitSpec with KafkaSettings {
       recordStream <- RecordStream.plain[IO, Customer](
                        consumerSettings,
                        consumer,
-                       Subscription.Topics(List("customers"))
+                       Subscription.Topics(List("customers")),
+                       None
                      )
-    } yield recordStream
+      table <- Resource.liftF(Tables.inMemory.plain(recordStream)(_.userId))
+    } yield table
   }
-
-  def usersTable(stream: Stream[IO, Customer]) =
-    Table.inMemoryFromStream {
-      stream
-        .map(customer => customer.userId -> customer)
-        .observe1(c => IO(println(s"Insert into table: ${c}")))
-    }
 
   def userClickStream(interrupt: Signal[IO, Boolean]) =
     Stream
@@ -98,13 +82,7 @@ class ReplicatedTableSpec extends UnitSpec with KafkaSettings {
       customersFiber <- Resource.liftF {
                          customersProducer(producer, signal).compile.drain.start
                        }
-      recordStream <- customersConsumer(config)
-      changelog = recordStream.records
-        .map(_.fa)
-        .collect {
-          case Right(customer) => customer
-        }
-      table <- usersTable(changelog)
+      table <- customersTable(config)
       printerFiber <- Resource.liftF(
                        joinWith(userClickStream(signal), table)(identity)
                          .observe1(pair => IO(println(s"Join: ${pair}")))
