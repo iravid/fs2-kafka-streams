@@ -26,6 +26,12 @@ trait Consumer[F[_]] {
   def pause(partitions: List[TopicPartition]): F[Unit]
 
   def resume(partitions: List[TopicPartition]): F[Unit]
+
+  def seek(partition: TopicPartition, offset: Long): F[Unit]
+
+  def seekToBeginning(partitions: List[TopicPartition]): F[Unit]
+
+  def seekToEnd(partitions: List[TopicPartition]): F[Unit]
 }
 
 class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F], timer: Timer[F])
@@ -97,6 +103,15 @@ class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F
 
   def resume(partitions: List[TopicPartition]): F[Unit] =
     F.delay(consumer.resume(partitions.asJava))
+
+  def seek(partition: TopicPartition, offset: Long): F[Unit] =
+    F.delay(consumer.seek(partition, offset))
+
+  def seekToBeginning(partitions: List[TopicPartition]): F[Unit] =
+    F.delay(consumer.seekToBeginning(partitions.asJava))
+
+  def seekToEnd(partitions: List[TopicPartition]): F[Unit] =
+    F.delay(consumer.seekToEnd(partitions.asJava))
 }
 
 object KafkaConsumer {

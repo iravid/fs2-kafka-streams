@@ -1,6 +1,6 @@
 package com.iravid.fs2.kafka.client
 
-import cats.{ Apply, Functor, MonadError }
+import cats.{ Applicative, Apply, Functor, MonadError }
 import cats.effect._, cats.effect.implicits._, cats.implicits._
 import cats.effect.concurrent.{ Deferred, Ref }
 import com.iravid.fs2.kafka.EnvT
@@ -191,15 +191,32 @@ object RecordStream {
     resources.commandStream
       .evalMap(commandHandler(resources, settings, _))
 
+  def recoverOffsets[F[_]](rebalance: Rebalance, recoveryFn: TopicPartition => F[Long])(
+    implicit F: Applicative[F]): F[List[(TopicPartition, Long)]] =
+    rebalance match {
+      case Rebalance.Revoke(_) => F.pure(List())
+      case Rebalance.Assign(tps) =>
+        tps.traverse(tp => recoveryFn(tp).tupleLeft(tp))
+    }
+
   def partitioned[F[_], T: KafkaDecoder](
     settings: ConsumerSettings,
     consumer: Consumer[F],
-    subscription: Subscription
+    subscription: Subscription,
+    offsetRecoveryFn: Option[TopicPartition => F[Long]]
   )(implicit F: ConcurrentEffect[F], timer: Timer[F]): Resource[F, Partitioned[F, T]] =
     for {
       pendingRebalances <- Resource.liftF(Ref[F].of(List[Rebalance]()))
       rebalanceListener: Rebalance.Listener[F] = rebalance =>
-        pendingRebalances.update(rebalance :: _)
+        for {
+          _ <- offsetRecoveryFn.traverse { fn =>
+                for {
+                  offsets <- recoverOffsets(rebalance, fn)
+                  _       <- offsets.traverse_(tp => consumer.seek(tp._1, tp._2))
+                } yield ()
+              }
+          _ <- pendingRebalances.update(rebalance :: _)
+        } yield ()
 
       _ <- Resource.make(consumer.subscribe(subscription, rebalanceListener))(_ =>
             consumer.unsubscribe)
@@ -242,8 +259,9 @@ object RecordStream {
   def plain[F[_]: ConcurrentEffect: Timer, T: KafkaDecoder](
     settings: ConsumerSettings,
     consumer: Consumer[F],
-    subscription: Subscription): Resource[F, Plain[F, T]] =
-    partitioned[F, T](settings, consumer, subscription).map {
+    subscription: Subscription,
+    offsetRecoveryFn: Option[TopicPartition => F[Long]]): Resource[F, Plain[F, T]] =
+    partitioned[F, T](settings, consumer, subscription, offsetRecoveryFn).map {
       case Partitioned(commitQueue, records) =>
         Plain(
           commitQueue,
