@@ -10,6 +10,8 @@ import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 
 class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
+  implicit val shift = IO.contextShift(global)
+  implicit val timer = IO.timer(global)
 
   def partitionedProgram(consumerSettings: ConsumerSettings,
                          producerSettings: ProducerSettings,
@@ -32,9 +34,8 @@ class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
                     .map {
                       case (_, stream) => stream
                     }
-                    .joinUnbounded
-                    .segmentN(data.length, true)
-                    .map(_.force.toChunk)
+                    .parJoinUnbounded
+                    .chunkN(data.length, true)
                     .evalMap { recs =>
                       stream.commitQueue
                         .requestCommit(recs.foldMap(rec =>
@@ -69,8 +70,7 @@ class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
       _ <- produce(producerSettings, topic, data.tupleLeft(0))
       results <- recordStream use { recordStream =>
                   recordStream.records
-                    .segmentN(data.length, true)
-                    .map(_.force.toChunk)
+                    .chunkN(data.length, true)
                     .evalMap { records =>
                       val commitReq =
                         records.foldMap(record =>

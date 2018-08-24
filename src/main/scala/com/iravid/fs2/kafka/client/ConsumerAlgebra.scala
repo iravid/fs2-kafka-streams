@@ -1,6 +1,6 @@
 package com.iravid.fs2.kafka.client
 
-import cats.effect.{ Resource, Sync }
+import cats.effect.{ ContextShift, Resource, Sync }
 import cats.implicits._
 import cats.effect.{ ConcurrentEffect, Timer }
 import com.iravid.fs2.kafka.model.ByteRecord
@@ -34,7 +34,9 @@ trait Consumer[F[_]] {
   def seekToEnd(partitions: List[TopicPartition]): F[Unit]
 }
 
-class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F], timer: Timer[F])
+class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F],
+                                                  timer: Timer[F],
+                                                  shift: ContextShift[F])
     extends Consumer[F] {
   def commit(data: OffsetMap): F[Unit] =
     F.delay(consumer.commitSync(data.asJava))
@@ -68,9 +70,9 @@ class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F
         val pollTask = F
           .delay(consumer.poll(pollTimeout.toMillis))
           .flatMap(adaptConsumerRecords)
-        F.toIO(timer.shift *> pollTask).unsafeRunAsync(cb)
+        F.toIO(shift.shift *> pollTask).unsafeRunAsync(cb)
 
-        F.toIO(F.delay(consumer.wakeup()))
+        F.delay(consumer.wakeup())
       }
     ) flatMap {
       case Left(_)       => F.raiseError(new WakeupException)
@@ -120,7 +122,7 @@ object KafkaConsumer {
       F.delay(new ByteConsumer(settings, new ByteArrayDeserializer, new ByteArrayDeserializer))
     )(consumer => F.delay(consumer.close()))
 
-  def apply[F[_]](settings: ConsumerSettings)(implicit F: ConcurrentEffect[F],
-                                              timer: Timer[F]): Resource[F, Consumer[F]] =
+  def apply[F[_]: ConcurrentEffect: Timer: ContextShift](
+    settings: ConsumerSettings): Resource[F, Consumer[F]] =
     consumer(settings.driverProperties).map(new KafkaConsumer(_))
 }

@@ -267,7 +267,7 @@ object RecordStream {
           commitQueue,
           records.map {
             case (_, stream) => stream
-          }.joinUnbounded
+          }.parJoinUnbounded
         )
     }
 

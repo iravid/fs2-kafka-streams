@@ -20,8 +20,8 @@ lazy val root = (project in file("."))
     libraryDependencies ++= Seq(
       "org.apache.kafka" % "kafka-clients"             % "1.1.0",
       "org.typelevel"    %% "cats-core"                % "1.1.0",
-      "org.typelevel"    %% "cats-effect"              % "1.0.0-RC2",
-      "co.fs2"           %% "fs2-core"                 % "1.0.0-M1",
+      "org.typelevel"    %% "cats-effect"              % "1.0.0-RC3",
+      "co.fs2"           %% "fs2-core"                 % "1.0.0-M4",
       "org.scodec"       %% "scodec-bits"              % "1.1.5",
       "org.scodec"       %% "scodec-core"              % "1.10.3",
       "org.rocksdb"      % "rocksdbjni"                % "5.13.2",

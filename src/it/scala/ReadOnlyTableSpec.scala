@@ -1,6 +1,6 @@
 package com.iravid.fs2.kafka.streams
 
-import cats.effect.{ Resource, Timer }
+import cats.effect.Resource
 import cats.implicits._
 import cats.effect.IO
 import com.iravid.fs2.kafka.UnitSpec
@@ -36,6 +36,9 @@ object Customer {
 }
 
 class ReadOnlyTableSpec extends UnitSpec with KafkaSettings {
+  implicit val timer = IO.timer(global)
+  implicit val shift = IO.contextShift(global)
+
   val userIdGen = Gen.oneOf("bob", "alice", "joe", "anyref")
 
   val customerGen = for {
@@ -47,7 +50,7 @@ class ReadOnlyTableSpec extends UnitSpec with KafkaSettings {
     Stream
       .awakeEvery[IO](1.second)
       .evalMap(_ => IO(customerGen.sample.get))
-      .observe1(customer => IO(println(s"Customer: ${customer}")))
+      .evalTap(customer => IO(println(s"Customer: ${customer}")))
       .interruptWhen(interrupt)
       .evalMap(Producer.produce[IO, Customer](producer, _, "customers", 0, None))
 
@@ -85,7 +88,7 @@ class ReadOnlyTableSpec extends UnitSpec with KafkaSettings {
       table <- customersTable(config)
       printerFiber <- Resource.liftF(
                        joinWith(userClickStream(signal), table)(identity)
-                         .observe1(pair => IO(println(s"Join: ${pair}")))
+                         .evalTap(pair => IO(println(s"Join: ${pair}")))
                          .compile
                          .drain
                          .start
@@ -95,7 +98,7 @@ class ReadOnlyTableSpec extends UnitSpec with KafkaSettings {
   "A table-based program" must {
     "work properly" in withRunningKafkaOnFoundPort(kafkaConfig) { config =>
       val r = program(config) use { signal =>
-        Timer[IO].sleep(10.seconds) >>
+        timer.sleep(10.seconds) >>
           signal.set(true)
       }
 
