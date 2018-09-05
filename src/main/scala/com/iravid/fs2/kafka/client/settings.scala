@@ -7,6 +7,7 @@ import scala.collection.JavaConverters._
 
 case class ConsumerSettings(driverSettings: Map[String, String],
                             maxPendingCommits: Int,
+                            commitBatchSize: Int,
                             outputBufferSize: Int,
                             partitionOutputBufferSize: Int,
                             pollTimeout: FiniteDuration,

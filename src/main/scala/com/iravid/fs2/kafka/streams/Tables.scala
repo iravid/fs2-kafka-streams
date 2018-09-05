@@ -30,7 +30,7 @@ object Tables {
 
                 table.putAll(data) *>
                   commitOffset.traverse_ { offset =>
-                    commitOffset.traverse_(table.commit) *>
+                    table.commit(offset) *>
                       recordStream.commitQueue.requestCommit(
                         CommitRequest(tp.topic, tp.partition, offset))
                   }
@@ -92,7 +92,7 @@ object Tables {
 
                     table.putAll(data) *>
                       commitOffset.traverse_ { offset =>
-                        commitOffset.traverse_(table.commit) *>
+                        table.commit(offset) *>
                           recordStream.commitQueue.requestCommit(
                             CommitRequest(tp.topic, tp.partition, offset))
                       }

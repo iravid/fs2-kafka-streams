@@ -7,9 +7,8 @@ import com.iravid.fs2.kafka.UnitSpec
 import com.iravid.fs2.kafka.client._
 import com.iravid.fs2.kafka.codecs.{ KafkaDecoder, KafkaEncoder }
 import fs2.Stream
-import fs2.async.mutable.Signal
+import fs2.concurrent.SignallingRef
 import java.nio.charset.StandardCharsets
-import net.manub.embeddedkafka.EmbeddedKafkaConfig
 import org.scalacheck.Gen
 
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -46,7 +45,7 @@ class ReadOnlyTableSpec extends UnitSpec with KafkaSettings {
     name   <- Gen.identifier
   } yield Customer(userId, name)
 
-  def customersProducer(producer: ByteProducer, interrupt: Signal[IO, Boolean]) =
+  def customersProducer(producer: ByteProducer, interrupt: SignallingRef[IO, Boolean]) =
     Stream
       .awakeEvery[IO](1.second)
       .evalMap(_ => IO(customerGen.sample.get))
@@ -54,8 +53,8 @@ class ReadOnlyTableSpec extends UnitSpec with KafkaSettings {
       .interruptWhen(interrupt)
       .evalMap(Producer.produce[IO, Customer](producer, _, "customers", 0, None))
 
-  def customersTable(config: EmbeddedKafkaConfig) = {
-    val consumerSettings = mkConsumerSettings(config.kafkaPort, "customers_consumer", 1000)
+  def customersTable = {
+    val consumerSettings = mkConsumerSettings("customers_consumer", 1000)
 
     for {
       consumer <- KafkaConsumer[IO](consumerSettings)
@@ -69,7 +68,7 @@ class ReadOnlyTableSpec extends UnitSpec with KafkaSettings {
     } yield table
   }
 
-  def userClickStream(interrupt: Signal[IO, Boolean]) =
+  def userClickStream(interrupt: SignallingRef[IO, Boolean]) =
     Stream
       .awakeEvery[IO](1.second)
       .evalMap(_ => IO(userIdGen.sample.get))
@@ -78,14 +77,14 @@ class ReadOnlyTableSpec extends UnitSpec with KafkaSettings {
   def joinWith[A, K, V](stream: Stream[IO, A], table: ReadOnlyTable[IO, K, V])(key: A => K) =
     stream.evalMap(a => table.get(key(a)).tupleLeft(a))
 
-  def program(config: EmbeddedKafkaConfig) =
+  def program =
     for {
-      signal   <- Resource.liftF(Signal[IO, Boolean](false))
-      producer <- Producer.create[IO](mkProducerSettings(config.kafkaPort))
+      signal   <- Resource.liftF(SignallingRef[IO, Boolean](false))
+      producer <- Producer.create[IO](mkProducerSettings)
       customersFiber <- Resource.liftF {
                          customersProducer(producer, signal).compile.drain.start
                        }
-      table <- customersTable(config)
+      table <- customersTable
       printerFiber <- Resource.liftF(
                        joinWith(userClickStream(signal), table)(identity)
                          .evalTap(pair => IO(println(s"Join: ${pair}")))
@@ -96,8 +95,8 @@ class ReadOnlyTableSpec extends UnitSpec with KafkaSettings {
     } yield signal
 
   "A table-based program" must {
-    "work properly" in withRunningKafkaOnFoundPort(kafkaConfig) { config =>
-      val r = program(config) use { signal =>
+    "work properly" in {
+      val r = program use { signal =>
         timer.sleep(10.seconds) >>
           signal.set(true)
       }

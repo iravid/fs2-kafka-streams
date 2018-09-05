@@ -7,7 +7,7 @@ import com.iravid.fs2.kafka.EnvT
 import com.iravid.fs2.kafka.codecs.KafkaDecoder
 import com.iravid.fs2.kafka.model.{ ByteRecord, ConsumerMessage, Result }
 import fs2._
-import fs2.async.mutable.Queue
+import fs2.concurrent.Queue
 import org.apache.kafka.common.TopicPartition
 
 object RecordStream {
@@ -44,8 +44,8 @@ object RecordStream {
     def create[F[_]: Concurrent]: F[PartitionHandle[F]] =
       for {
         recordCount <- Ref[F].of(0)
-        queue <- async
-                  .unboundedQueue[F, Option[Chunk[ByteRecord]]]
+        queue <- Queue
+                  .unbounded[F, Option[Chunk[ByteRecord]]]
       } yield PartitionHandle(recordCount, queue)
   }
 
@@ -64,7 +64,7 @@ object RecordStream {
     def commandStream(implicit F: Concurrent[F])
       : Stream[F, Either[(Deferred[F, Either[Throwable, Unit]], CommitRequest), Poll.type]] =
       shutdownQueue.dequeue
-        .mergeHaltL(commits.queue.dequeue.either(polls).map(_.some))
+        .mergeHaltL(commits.batchedDequeue.either(polls).map(_.some))
         .unNoneTerminate
   }
 
@@ -224,14 +224,17 @@ object RecordStream {
       resources <- Resource.liftF {
                     for {
                       partitionTracker <- Ref[F].of(Map.empty[TopicPartition, PartitionHandle[F]])
-                      partitionsQueue <- async.unboundedQueue[
+                      partitionsQueue <- Queue.unbounded[
                                           F,
                                           Either[Throwable,
                                                  Option[(TopicPartition,
                                                          Stream[F, ConsumerMessage[Result, T]])]]]
                       pausedPartitions <- Ref[F].of(Set.empty[TopicPartition])
-                      commitQueue      <- CommitQueue.create[F](settings.maxPendingCommits)
-                      shutdownQueue    <- async.boundedQueue[F, None.type](1)
+                      commitQueue <- CommitQueue.create[F](
+                                      settings.maxPendingCommits,
+                                      settings.commitBatchSize
+                                    )
+                      shutdownQueue <- Queue.bounded[F, None.type](1)
                       polls = Stream(Poll) ++ Stream.fixedRate(settings.pollInterval).as(Poll)
 
                     } yield

@@ -1,6 +1,6 @@
 package com.iravid.fs2.kafka.client
 
-import cats.effect.{ ContextShift, Resource, Sync }
+import cats.effect.{ ContextShift, ExitCase, Resource, Sync }
 import cats.implicits._
 import cats.effect.{ ConcurrentEffect, Timer }
 import com.iravid.fs2.kafka.model.ByteRecord
@@ -9,6 +9,7 @@ import org.apache.kafka.clients.consumer.{ ConsumerRebalanceListener, ConsumerRe
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.errors.WakeupException
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
+import java.time.{ Duration => JDuration }
 
 import scala.concurrent.duration.FiniteDuration
 import scala.collection.JavaConverters._
@@ -34,9 +35,7 @@ trait Consumer[F[_]] {
   def seekToEnd(partitions: List[TopicPartition]): F[Unit]
 }
 
-class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F],
-                                                  timer: Timer[F],
-                                                  shift: ContextShift[F])
+class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F], timer: Timer[F])
     extends Consumer[F] {
   def commit(data: OffsetMap): F[Unit] =
     F.delay(consumer.commitSync(data.asJava))
@@ -66,13 +65,11 @@ class KafkaConsumer[F[_]](consumer: ByteConsumer)(implicit F: ConcurrentEffect[F
            wakeupTimeout: FiniteDuration): F[Map[TopicPartition, List[ByteRecord]]] =
     F.race(
       timer.sleep(wakeupTimeout),
-      F.cancelable[Map[TopicPartition, List[ByteRecord]]] { cb =>
-        val pollTask = F
-          .delay(consumer.poll(pollTimeout.toMillis))
-          .flatMap(adaptConsumerRecords)
-        F.toIO(shift.shift *> pollTask).unsafeRunAsync(cb)
-
-        F.delay(consumer.wakeup())
+      F.bracketCase(F.start(F.delay(consumer.poll(JDuration.ofMillis(pollTimeout.toMillis)))))(
+        _.join.flatMap(adaptConsumerRecords)) {
+        case (_, ExitCase.Completed) => F.delay(())
+        case (_, ExitCase.Error(_))  => F.delay(consumer.wakeup())
+        case (_, ExitCase.Canceled)  => F.delay(consumer.wakeup())
       }
     ) flatMap {
       case Left(_)       => F.raiseError(new WakeupException)

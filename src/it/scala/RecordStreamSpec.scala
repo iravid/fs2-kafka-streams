@@ -75,7 +75,9 @@ class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
                       val commitReq =
                         records.foldMap(record =>
                           CommitRequest(record.env.topic, record.env.partition, record.env.offset))
-                      recordStream.commitQueue.requestCommit(commitReq).as(records.map(_.fa))
+                      recordStream.commitQueue
+                        .requestCommit(commitReq)
+                        .as(records.map(_.fa))
                     }
                     .flatMap(Stream.chunk(_).covary[IO])
                     .take(data.length.toLong)
@@ -87,12 +89,12 @@ class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
   }
 
   "The plain consumer" should {
-    "work properly" in withRunningKafkaOnFoundPort(kafkaConfig) { config =>
+    "work properly" in {
       forAll((nonEmptyStr, "groupId"), (nonEmptyStr, "topic"), (Gen.listOf(Gen.alphaStr), "data")) {
         (groupId: String, topic: String, data: List[String]) =>
           val consumerSettings =
-            mkConsumerSettings(config.kafkaPort, groupId, 100)
-          val producerSettings = mkProducerSettings(config.kafkaPort)
+            mkConsumerSettings(groupId, 100)
+          val producerSettings = mkProducerSettings
           val results =
             plainProgram(consumerSettings, producerSettings, topic, data)
               .unsafeRunSync()
@@ -101,24 +103,23 @@ class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
       }
     }
 
-    "handle data lengths bigger than the buffer size" in withRunningKafkaOnFoundPort(kafkaConfig) {
-      config =>
-        forAll((nonEmptyStr, "groupId"), (nonEmptyStr, "topic"), (Gen.listOf(Gen.alphaStr), "data")) {
-          (groupId: String, topic: String, data: List[String]) =>
-            val consumerSettings =
-              mkConsumerSettings(config.kafkaPort, groupId, (data.length / 2) max 1)
-            val producerSettings = mkProducerSettings(config.kafkaPort)
-            val results =
-              plainProgram(consumerSettings, producerSettings, topic, data)
-                .unsafeRunSync()
+    "handle data lengths bigger than the buffer size" in {
+      forAll((nonEmptyStr, "groupId"), (nonEmptyStr, "topic"), (Gen.listOf(Gen.alphaStr), "data")) {
+        (groupId: String, topic: String, data: List[String]) =>
+          val consumerSettings =
+            mkConsumerSettings(groupId, (data.length / 2) max 1)
+          val producerSettings = mkProducerSettings
+          val results =
+            plainProgram(consumerSettings, producerSettings, topic, data)
+              .unsafeRunSync()
 
-            results.collect { case Right(a) => a } should contain theSameElementsAs data
-        }
+          results.collect { case Right(a) => a } should contain theSameElementsAs data
+      }
     }
   }
 
   "The partitioned consumer" should {
-    "work properly" in withRunningKafkaOnFoundPort(kafkaConfig) { implicit config =>
+    "work properly" in {
       val dataGen = for {
         partitions <- Gen.chooseNum(1, 8)
         data       <- Gen.listOf(Gen.zip(Gen.chooseNum(0, partitions - 1), Gen.alphaStr))
@@ -126,16 +127,17 @@ class RecordStreamIntegrationSpec extends UnitSpec with KafkaSettings {
 
       forAll((nonEmptyStr, "topic"), (nonEmptyStr, "groupId"), (dataGen, "data")) {
         case (topic, groupId, (partitions, data)) =>
-          createCustomTopic(topic, partitions = partitions)
+          val results = createCustomTopic(topic, partitions = partitions) use { _ =>
+            val consumerSettings = mkConsumerSettings(groupId, 100)
+            val producerSettings = mkProducerSettings
 
-          val consumerSettings =
-            mkConsumerSettings(config.kafkaPort, groupId, 100)
-          val producerSettings = mkProducerSettings(config.kafkaPort)
-          val results =
             partitionedProgram(consumerSettings, producerSettings, topic, data)
-              .unsafeRunSync()
+          }
 
-          results.collect { case Right(a) => a } should contain theSameElementsAs (data.map(_._2))
+          results
+            .unsafeRunSync()
+            .collect { case Right(a) => a } should contain theSameElementsAs
+            (data.map(_._2))
       }
     }
   }

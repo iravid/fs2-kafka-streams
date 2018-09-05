@@ -18,17 +18,16 @@ lazy val root = (project in file("."))
     addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.2.4"),
     scalafmtOnCompile := true,
     libraryDependencies ++= Seq(
-      "org.apache.kafka" % "kafka-clients"             % "1.1.0",
+      "org.apache.kafka" % "kafka-clients"             % "2.0.0",
       "org.typelevel"    %% "cats-core"                % "1.1.0",
-      "org.typelevel"    %% "cats-effect"              % "1.0.0-RC3",
-      "co.fs2"           %% "fs2-core"                 % "1.0.0-M4",
+      "org.typelevel"    %% "cats-effect"              % "1.0.0",
+      "co.fs2"           %% "fs2-core"                 % "1.0.0-M5",
       "org.scodec"       %% "scodec-bits"              % "1.1.5",
       "org.scodec"       %% "scodec-core"              % "1.10.3",
       "org.rocksdb"      % "rocksdbjni"                % "5.13.2",
       "com.lihaoyi"      %% "acyclic"                  % "0.1.7" % "provided",
       "org.scalatest"    %% "scalatest"                % "3.0.4" % "it,test",
-      "org.scalacheck"   %% "scalacheck"               % "1.14.0" % "it,test",
-      "net.manub"        %% "scalatest-embedded-kafka" % "1.1.0-kafka1.1-nosr" % "it,test"
+      "org.scalacheck"   %% "scalacheck"               % "1.14.0" % "it,test"
     ),
     scalacOptions ++= Seq("-P:acyclic:force")
   )
