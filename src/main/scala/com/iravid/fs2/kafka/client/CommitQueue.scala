@@ -18,7 +18,7 @@ case class CommitQueue[F[_]](queue: Queue[F, (Deferred[F, Either[Throwable, Unit
   def batchedDequeue(
     implicit F: Concurrent[F]): Stream[F, (Deferred[F, Either[Throwable, Unit]], CommitRequest)] =
     Stream
-      .repeatEval(queue.dequeueBatch1(batchSize))
+      .repeatEval(queue.dequeueChunk1(batchSize))
       .evalMap { chunk =>
         val (defs, reqs) = chunk.toList.unzip
 

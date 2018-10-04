@@ -19,9 +19,9 @@ lazy val root = (project in file("."))
     scalafmtOnCompile := true,
     libraryDependencies ++= Seq(
       "org.apache.kafka" % "kafka-clients"             % "2.0.0",
-      "org.typelevel"    %% "cats-core"                % "1.1.0",
+      "org.typelevel"    %% "cats-core"                % "1.4.0",
       "org.typelevel"    %% "cats-effect"              % "1.0.0",
-      "co.fs2"           %% "fs2-core"                 % "1.0.0-M5",
+      "co.fs2"           %% "fs2-core"                 % "1.0.0-RC2",
       "org.scodec"       %% "scodec-bits"              % "1.1.5",
       "org.scodec"       %% "scodec-core"              % "1.10.3",
       "org.rocksdb"      % "rocksdbjni"                % "5.13.2",
